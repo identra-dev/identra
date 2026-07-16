@@ -1,0 +1,227 @@
+/* Ubuntu / Yaru: dark neutral canvas, aubergine terminals, that one orange accent. */
+:root {
+  --yaru-orange: #e95420;
+  --bg: #242424;
+  --panel: #2c2c2c;
+  --panel-edge: #1b1b1b;
+  --header: #333333;
+  --text: #f2f2f2;
+  /* One color per node/dock state (Yaru). Only ready + running are live today. */
+  --state-ready: #e95420;
+  --state-running: #33d17a;
+  --state-setup: #e5a50a;
+  --state-missing: #5e5c64;
+  --edge-idle: #5e5c64;
+}
+
+* {
+  box-sizing: border-box;
+}
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+}
+body {
+  font-family: Ubuntu, "Segoe UI", system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  overflow: hidden;
+}
+
+.identra-root {
+  position: fixed;
+  inset: 0;
+}
+.react-flow {
+  background: var(--bg);
+}
+
+/* Strip react-flow's default node chrome; the .identra-node draws its own. */
+.react-flow__node-agent,
+.react-flow__node-browser {
+  padding: 0;
+  border: none;
+  background: transparent;
+  border-radius: 10px;
+}
+
+.identra-node {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.identra-node__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--header);
+  border-bottom: 1px solid var(--panel-edge);
+  cursor: grab;
+  user-select: none;
+}
+/* The whole state indicator is this one dot; its color is the data-state, not six components. */
+.identra-node__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--state-ready);
+  flex: none;
+}
+.identra-node__dot[data-state="running"] {
+  background: var(--state-running);
+  animation: identra-pulse 1.2s ease-in-out infinite;
+}
+@keyframes identra-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+/* 20px brand tile, shared by node headers and dock buttons. */
+.identra-node__icon,
+.identra-dock__tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  color: #fff;
+  flex: none;
+}
+.identra-node__title {
+  font-size: 13px;
+  font-weight: 600;
+}
+/* Connection ports: small Yaru dots on the node sides. */
+.react-flow__handle.identra-port {
+  width: 9px;
+  height: 9px;
+  background: var(--panel);
+  border: 2px solid var(--state-missing);
+  border-radius: 50%;
+}
+.react-flow__handle.identra-port:hover {
+  border-color: var(--state-ready);
+}
+.react-flow__edge-path {
+  stroke: var(--edge-idle);
+  stroke-width: 2;
+}
+/* Browser node: Yaru URL bar in the header, iframe for a body. */
+.identra-node__url {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--panel-edge);
+  border: 1px solid #000;
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+.identra-node__url:focus {
+  outline: none;
+  border-color: var(--state-ready);
+}
+.identra-node__frame {
+  flex: 1;
+  min-height: 0;
+  border: 0;
+  background: #fff;
+}
+.identra-node__term {
+  flex: 1;
+  min-height: 0;
+  padding: 6px 8px;
+  background: #300a24;
+}
+.identra-node__term .xterm {
+  height: 100%;
+}
+
+.identra-dock {
+  position: fixed;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 14px;
+  background: rgba(44, 44, 44, 0.9);
+  border: 1px solid var(--panel-edge);
+  backdrop-filter: blur(8px);
+}
+/* Launcher tile: icon over label, a small auth dot in the corner. The three data-states read as
+   full-color (ready), dimmed (setup), greyed (missing). */
+.identra-dock__btn {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  border-radius: 9px;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+.identra-dock__btn:hover:not([data-state="missing"]) {
+  background: rgba(255, 255, 255, 0.06);
+}
+.identra-dock__btn[data-state="ready"]:hover .identra-dock__tile {
+  box-shadow: 0 0 0 2px var(--yaru-orange);
+}
+.identra-dock__btn[data-state="setup"] {
+  opacity: 0.7;
+}
+.identra-dock__btn[data-state="missing"] {
+  opacity: 0.4;
+  cursor: default;
+}
+.identra-dock__btn[data-state="missing"] .identra-dock__tile {
+  filter: grayscale(1);
+}
+.identra-dock__label {
+  max-width: 64px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.identra-dock__dot {
+  position: absolute;
+  top: 3px;
+  right: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--state-ready);
+  box-shadow: 0 0 0 1.5px var(--panel);
+}
+.identra-dock__dot[data-state="setup"] {
+  background: var(--state-setup);
+}
+.identra-dock__dot[data-state="missing"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--state-missing);
+}
