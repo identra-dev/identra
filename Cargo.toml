@@ -1,0 +1,4 @@
+[workspace]
+resolver = "2"
+members = ["crates/identra-core", "crates/identra-mcp", "apps/identra-desktop/src-tauri"]
+# identra-memory (P3) joins the workspace when its phase starts.
