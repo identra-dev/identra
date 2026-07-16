@@ -1,0 +1,11 @@
+reference/
+*.deb
+target/
+node_modules/
+dist/
+.identra/
+scripts/local/
+.env
+.env.*
+!.env.example
+.DS_Store
