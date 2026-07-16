@@ -1,0 +1,9 @@
+[package]
+name = "identra-mcp"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Identra's edge-gated context bus: peers, context, and messages between agent nodes."
+
+[dependencies]
+identra-core = { path = "../identra-core" }
