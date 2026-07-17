@@ -1,5 +1,10 @@
-import { memo, useEffect, useRef, useState } from "react";
-import { Handle, Position, type NodeProps } from "@xyflow/react";
+import { memo, useEffect, useRef, useState, type CSSProperties } from "react";
+import {
+  Handle,
+  Position,
+  useReactFlow,
+  type NodeProps,
+} from "@xyflow/react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import {
@@ -13,13 +18,14 @@ import {
   type OutputEvent,
 } from "./api";
 import { pastSnapshot } from "./reattach";
-import { AgentIcon } from "./icons";
+import { AgentIcon, auraFor } from "./icons";
 
 // `kind` is the agent id (codex, claude, …); the node resolves its binary and args from it.
 export type AgentNodeData = { title: string; cwd: string | null; kind: string };
 
 function AgentNodeImpl({ id, data }: NodeProps) {
   const nodeData = data as AgentNodeData;
+  const { deleteElements } = useReactFlow();
   const termHost = useRef<HTMLDivElement>(null);
   // Three honest states. Output means it is working; 1.5s of quiet settles it back to ready. Exit
   // is the only one the node cannot infer for itself, so the engine tells it: without that, an
@@ -161,7 +167,11 @@ function AgentNodeImpl({ id, data }: NodeProps) {
   }, [id]);
 
   return (
-    <div className="identra-node" data-state={state}>
+    <div
+      className="identra-node"
+      data-state={state}
+      style={{ "--aura": auraFor(nodeData.kind) } as CSSProperties}
+    >
       <Handle type="target" position={Position.Left} className="identra-port" />
       <Handle
         type="source"
@@ -174,6 +184,24 @@ function AgentNodeImpl({ id, data }: NodeProps) {
         <span className="identra-node__title">
           {nodeData.title || nodeData.kind}
         </span>
+        <button
+          className="identra-node__close nodrag"
+          title={`Close this ${nodeData.title || nodeData.kind}`}
+          onClick={() => {
+            // Naming what it is, because "delete this node" does not tell you that a conversation
+            // goes with it. This is the only way to remove one now that the key does not.
+            const name = nodeData.title || nodeData.kind;
+            if (
+              window.confirm(
+                `Close ${name}?\n\nThe agent stops and its conversation is forgotten.`,
+              )
+            ) {
+              void deleteElements({ nodes: [{ id }] });
+            }
+          }}
+        >
+          &times;
+        </button>
       </div>
       <div className="identra-node__term nodrag nowheel" ref={termHost} />
     </div>

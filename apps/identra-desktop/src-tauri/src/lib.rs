@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use identra_core::canvas::{self, Canvas};
+use identra_core::session;
 use identra_core::terminal::{Event as TerminalEvent, TerminalManager};
 use identra_core::workspace::{self, WorkspaceMeta};
 use identra_core::{detect, AgentInfo};
@@ -62,6 +63,10 @@ struct Snapshot {
     last_seq: u64,
 }
 
+/// How often to look for each agent's session. Often enough that a conversation started a moment
+/// ago is remembered before the user quits, rare enough to be free: it reads a few files in /proc.
+const SESSION_SAMPLE: std::time::Duration = std::time::Duration::from_secs(3);
+
 fn workspaces_root() -> Result<PathBuf, String> {
     workspace::root().ok_or_else(|| "cannot find a home directory for workspaces".to_string())
 }
@@ -92,6 +97,18 @@ fn terminal_start(
     // identity from. Minting it here, per node, is what stops one agent claiming to be another; it
     // goes into the child's env and never touches the frontend or the disk.
     let mut args = args;
+
+    // Pick the conversation this node was having back up, if it still exists. This goes on before
+    // the bus wiring and the ordering is load bearing: claude's --mcp-config takes a list, so
+    // anything after it that is not a flag is swallowed as another config path.
+    if let Some(previous) = session::load(&workspace, &id) {
+        if previous.agent == kind {
+            if let Some(resume) = session::resume_args(&previous) {
+                args.extend(resume);
+            }
+        }
+    }
+
     args.extend(identra_mcp::config::launch_args(
         &kind,
         state.mcp_port,
@@ -130,8 +147,12 @@ fn terminal_snapshot(state: State<AppState>, id: String) -> Option<Snapshot> {
         .map(|(data, last_seq)| Snapshot { data, last_seq })
 }
 
+/// Kill a node's agent. Deleting a node from the canvas is a deliberate act, so its conversation is
+/// forgotten too: the alternative is a new node with the same id silently inheriting a dead one's
+/// session, which is the wrong conversation arriving from nowhere.
 #[tauri::command]
 fn terminal_kill(state: State<AppState>, id: String) -> Result<(), String> {
+    session::forget(&state.dir(), &id);
     state.manager.kill(&id).map_err(|e| e.to_string())
 }
 
@@ -300,6 +321,27 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = identra_mcp::server::serve(listener, bus_for_task).await {
                     eprintln!("identra: context bus stopped: {e}");
+                }
+            });
+
+            // Watch what conversation each agent is having, so closing the app does not throw it
+            // away. None of these CLIs will tell you their session id, but each keeps its transcript
+            // open, so the answer is readable off the live process. It has to be sampled rather than
+            // read once: the id does not exist until the agent has started and opened the file.
+            let watcher = manager.clone();
+            let watched_dir = project_dir.clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(SESSION_SAMPLE);
+                let dir = watched_dir.lock().unwrap().clone();
+                for id in watcher.ids() {
+                    let Some(pid) = watcher.pid(&id) else {
+                        continue;
+                    };
+                    if let Some(found) = session::detect(pid) {
+                        // Cheap and idempotent: the same session rewrites the same file. Only a
+                        // change matters, and comparing costs as much as writing.
+                        let _ = session::save(&dir, &id, &found);
+                    }
                 }
             });
 

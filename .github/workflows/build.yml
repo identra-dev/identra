@@ -1,0 +1,106 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+# A push that lands while the previous one is still building makes the older run pointless.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The gates, once, on the cheap runner. Nothing here is OS specific, so running it on three
+  # machines would just buy the same answer three times.
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@v2
+      - name: System deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev librsvg2-dev
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - name: Frontend
+        working-directory: apps/identra-desktop/frontend
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+          bun test
+      - name: Trace gate
+        run: bash scripts/trace-gate.sh
+
+  # The platform code is small (session detection and the macOS auth branch) but it is real, and it
+  # is invisible to a Linux build: cfg'd-out code is never type checked. This is the only thing that
+  # catches a macOS-only compile error before a Mac user does.
+  check-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  # Bundles. Linux is built where it runs; macOS has to be built on a Mac, which is the whole reason
+  # this workflow exists rather than a local script.
+  bundle:
+    needs: [check, check-macos]
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: ""
+            name: linux
+          # Apple Silicon and Intel as one binary, so there is one download and no way to pick wrong.
+          - os: macos-latest
+            target: universal-apple-darwin
+            name: macos
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: macOS targets
+        if: matrix.name == 'macos'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@v2
+      - name: System deps
+        if: matrix.name == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev librsvg2-dev
+      - name: Frontend deps
+        working-directory: apps/identra-desktop/frontend
+        run: bun install --frozen-lockfile
+      - uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: apps/identra-desktop
+          args: ${{ matrix.target && format('--target {0}', matrix.target) || '' }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: identra-${{ matrix.name }}
+          path: |
+            target/release/bundle/appimage/*.AppImage
+            target/release/bundle/deb/*.deb
+            target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          if-no-files-found: warn

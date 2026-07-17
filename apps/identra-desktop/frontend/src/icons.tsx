@@ -9,6 +9,9 @@
 type Mark = {
   /// Tile fill behind the mark.
   tile: string;
+  /// The colour this agent glows while working. Defaults to the tile where the tile reads on the
+  /// dark canvas; set explicitly where the tile is white or near black and would not.
+  aura?: string;
   /// The mark itself, and the letter's color in the fallback.
   ink: string;
   /// 24x24 path. Absent means "no published mark", so `letter` is drawn instead.
@@ -39,12 +42,12 @@ const GLOBE =
   "M12 1.5a10.5 10.5 0 100 21 10.5 10.5 0 000-21zm0 1.6c1.42 0 2.9 2.02 3.5 5.15H8.5C9.1 5.12 10.58 3.1 12 3.1zM7.1 8.25H3.9A8.94 8.94 0 018.6 3.9c-.66 1.16-1.17 2.65-1.5 4.35zm-3.9 1.6h3.65a22 22 0 000 4.3H3.2a8.9 8.9 0 010-4.3zm4 4.3a20 20 0 010-4.3h9.6a20 20 0 010 4.3zm-.1 1.6c.33 1.7.84 3.19 1.5 4.35a8.94 8.94 0 01-4.7-4.35zm1.4 0h7c-.6 3.13-2.08 5.15-3.5 5.15s-2.9-2.02-3.5-5.15zm8.4 0h3.2a8.94 8.94 0 01-4.7 4.35c.66-1.16 1.17-2.65 1.5-4.35zm3.9-1.6h-3.65a22 22 0 000-4.3h3.65a8.9 8.9 0 010 4.3zm-.7-5.9h-3.2c-.33-1.7-.84-3.19-1.5-4.35a8.94 8.94 0 014.7 4.35z";
 
 const MARKS: Record<string, Mark> = {
-  codex: { tile: "#0d0d0d", ink: "#ffffff", path: OPENAI },
-  claude: { tile: "#d97757", ink: "#ffffff", path: CLAUDE_CODE },
-  gemini: { tile: "#ffffff", ink: "#8e75b2", path: GEMINI },
-  opencode: { tile: "#f6f5f4", ink: "#000000", path: OPENCODE },
-  "cursor-agent": { tile: "#f6f5f4", ink: "#000000", path: CURSOR },
-  amp: { tile: "#005af0", ink: "#ffffff", path: AMP },
+  codex: { tile: "#0d0d0d", ink: "#ffffff", path: OPENAI, aura: "#10a37f" },
+  claude: { tile: "#d97757", ink: "#ffffff", path: CLAUDE_CODE, aura: "#d97757" },
+  gemini: { tile: "#ffffff", ink: "#8e75b2", path: GEMINI, aura: "#8e75b2" },
+  opencode: { tile: "#f6f5f4", ink: "#000000", path: OPENCODE, aura: "#22d3ee" },
+  "cursor-agent": { tile: "#f6f5f4", ink: "#000000", path: CURSOR, aura: "#f6f5f4" },
+  amp: { tile: "#005af0", ink: "#ffffff", path: AMP, aura: "#005af0" },
   // No published mark I can use, so these carry a lettermark rather than an invented logo.
   aider: { tile: "#17b217", ink: "#ffffff", letter: "A" },
   goose: { tile: "#b5835a", ink: "#ffffff", letter: "G" },
@@ -58,6 +61,11 @@ const fallback = (kind: string): Mark => ({
   ink: "#ffffff",
   letter: (kind[0] ?? "?").toUpperCase(),
 });
+
+/// The colour a node glows while its agent is working. It is the agent's own brand colour, so you
+/// can tell which one is busy from the corner of your eye without reading anything.
+export const auraFor = (kind: string): string =>
+  (MARKS[kind] ?? fallback(kind)).aura ?? "#e95420";
 
 export function AgentIcon({
   kind,

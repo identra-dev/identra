@@ -91,6 +91,28 @@ export default function App() {
     });
   }, []);
 
+  // A terminal and an iframe both need the wheel for their own scrolling, so they swallow it, which
+  // leaves you unable to zoom the canvas while the pointer is over a node. Holding the modifier
+  // turns that off for as long as it is down: the class stops matching, and the wheel reaches the
+  // canvas. Cheaper than hunting for empty space, and it is the same key you already hold to zoom.
+  const [wheelToCanvas, setWheelToCanvas] = useState(false);
+  useEffect(() => {
+    const down = (e: KeyboardEvent) =>
+      (e.metaKey || e.ctrlKey) && setWheelToCanvas(true);
+    const up = (e: KeyboardEvent) =>
+      !e.metaKey && !e.ctrlKey && setWheelToCanvas(false);
+    // Releasing the key outside the window never fires keyup, which would leave it stuck on.
+    const blur = () => setWheelToCanvas(false);
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    window.addEventListener("blur", blur);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+      window.removeEventListener("blur", blur);
+    };
+  }, []);
+
   // Opening is what makes a workspace active in the engine: it repoints the canvas, and writes the
   // bus config and the agent guide into that folder so any agent launched here can find its peers.
   const openWorkspace = useCallback(async (w: WorkspaceMeta) => {
@@ -319,6 +341,12 @@ export default function App() {
         nodesConnectable
         minZoom={0.2}
         maxZoom={2}
+        // A node here is a running agent with a live conversation, not a shape. The default binds
+        // Backspace and Delete to destroy the selection, which means one keystroke with a node
+        // selected kills an agent mid-task and takes its session with it. Deleting goes through the
+        // node menu, where it can ask first.
+        deleteKeyCode={null}
+        noWheelClassName={wheelToCanvas ? "identra-wheel-never" : "nowheel"}
         proOptions={{ hideAttribution: true }}
       >
         <Background color="#3a3a3a" gap={24} />

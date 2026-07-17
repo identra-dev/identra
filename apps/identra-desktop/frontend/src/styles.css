@@ -684,3 +684,65 @@ body {
   font-size: 11px;
   color: #f66151;
 }
+
+/* A working node breathes in its own agent's colour.
+   A dot is something you check; a glow is something you notice, and because it is the agent's brand
+   colour you can tell WHICH one is working from the corner of your eye, without reading. Motion is
+   the signal, so there is no spinner anywhere on the canvas. */
+@keyframes identra-aura {
+  0%,
+  100% {
+    box-shadow:
+      0 8px 24px rgba(0, 0, 0, 0.35),
+      0 0 10px 1px color-mix(in srgb, var(--aura, var(--yaru-orange)) 20%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 8px 24px rgba(0, 0, 0, 0.35),
+      0 0 19px 3px color-mix(in srgb, var(--aura, var(--yaru-orange)) 36%, transparent);
+  }
+}
+.identra-node[data-state="running"] {
+  animation: 2.4s ease-in-out infinite identra-aura;
+}
+/* A node whose agent is gone recedes rather than sitting there looking available. */
+.identra-node[data-state="exited"] {
+  opacity: 0.72;
+}
+
+/* Closing a node is the only way to remove one now, so it has to be reachable. Quiet until you are
+   on the node, red once you are on the button: destructive, but not shouting from across the room. */
+.identra-node__close {
+  margin-left: auto;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  color: #6b6b6b;
+  font-size: 15px;
+  line-height: 1;
+  padding: 1px 6px 3px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease-out;
+}
+.identra-node:hover .identra-node__close {
+  opacity: 1;
+}
+.identra-node__close:hover {
+  background: #5c1a13;
+  color: #f66151;
+}
+
+/* Reduced motion still has to carry the information, so the aura does not disappear, it stops
+   moving: a node holds the bright end of the same glow while it works. */
+@media (prefers-reduced-motion: reduce) {
+  .identra-node[data-state="running"] {
+    animation: none;
+    box-shadow:
+      0 8px 24px rgba(0, 0, 0, 0.35),
+      0 0 19px 3px color-mix(in srgb, var(--aura, var(--yaru-orange)) 36%, transparent);
+  }
+  .identra-node__dot[data-state="running"] {
+    animation: none;
+  }
+}

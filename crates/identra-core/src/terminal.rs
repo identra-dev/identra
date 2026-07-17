@@ -250,6 +250,19 @@ impl TerminalManager {
         self.terminals.lock().unwrap().keys().cloned().collect()
     }
 
+    /// The process this terminal spawned, so a caller can look at what it is actually doing.
+    /// [`crate::session`] uses it to find the agent's conversation.
+    pub fn pid(&self, id: &str) -> Option<u32> {
+        self.terminals
+            .lock()
+            .unwrap()
+            .get(id)?
+            .child
+            .lock()
+            .unwrap()
+            .process_id()
+    }
+
     /// What `id` is doing, or `None` if there is no such terminal.
     ///
     /// Read from output timing rather than asked of the agent, because there is nothing to ask: a
