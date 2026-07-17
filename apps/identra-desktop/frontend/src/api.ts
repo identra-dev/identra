@@ -96,3 +96,22 @@ export const workspaceOpen = (slug: string) =>
 
 export const onOutput = (cb: (e: OutputEvent) => void): Promise<UnlistenFn> =>
   listen<OutputEvent>("terminal://output", (evt) => cb(evt.payload));
+
+// A canvas change an agent asked for. The canvas is the only writer of its own state, so the engine
+// asks rather than writing, and waits for the reply keyed by requestId.
+export type CanvasCommand = {
+  requestId: string;
+  action: string;
+  params: Record<string, unknown>;
+};
+
+// What the canvas says it did. `id` names whatever was created, so the agent can talk about it.
+export type CanvasResult = { ok: true; id?: string } | { ok: false; error: string };
+
+export const onCanvasCommand = (
+  cb: (c: CanvasCommand) => void,
+): Promise<UnlistenFn> =>
+  listen<CanvasCommand>("canvas://command", (evt) => cb(evt.payload));
+
+export const canvasCommandResult = (requestId: string, result: CanvasResult) =>
+  invoke<void>("canvas_command_result", { requestId, result });

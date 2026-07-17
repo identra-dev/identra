@@ -161,6 +161,24 @@ When a task has parts that do not depend on each other, do not do all of it your
 6. Record what the two of you settled on with `add_memory`, so the next agent inherits the decision
    instead of reopening it.
 
+## Bringing on more agents
+
+You are not limited to who is already here. If the work genuinely splits, add help:
+
+- `list_canvas()` shows every node here and how they are wired.
+- `add_terminal(agent?, title?)` starts another agent as its own node, wired to you automatically,
+  so you can send it work the moment it comes up.
+- `connect_nodes(from, to)` wires two nodes. An agent reads its tools when it starts, so wire
+  before the other one launches where you can.
+- `add_note(text)` leaves a note on the canvas for your user. Use it for something a human needs to
+  see or decide, not for talking to an agent.
+
+Put the work on the board before you bring someone on. A helper that arrives to an empty board has
+nothing to claim and will just sit there. Add the tasks, then add the agent, then tell it to claim.
+
+Do not spawn help for work you could finish in the time it takes to explain it. Every extra agent
+is another thing your user is paying for and reading.
+
 ## The one rule that keeps this from breaking
 
 Two agents editing the same file will overwrite each other. There is no isolation between you yet,

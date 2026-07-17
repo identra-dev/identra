@@ -72,7 +72,12 @@ fn an_agent_reaches_the_bus_and_sees_only_the_peer_it_is_wired_to() {
     .expect("seed the canvas");
 
     let manager = Arc::new(TerminalManager::new(Arc::new(|_id, _out| {})));
-    let bus = Arc::new(Bus::new(manager, Arc::new(Mutex::new(dir.clone()))));
+    // No canvas in this test: nothing here asks the window to change anything.
+    let bus = Arc::new(Bus::new(
+        manager,
+        Arc::new(Mutex::new(dir.clone())),
+        Arc::new(|_cmd| {}),
+    ));
     // Each node is launched with its own secret. That is the only thing that says who it is.
     let token = bus.issue_token("a");
     let token_c = bus.issue_token("c");

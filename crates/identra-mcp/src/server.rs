@@ -31,6 +31,9 @@ use std::io;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use tokio::sync::oneshot;
 
 use axum::{
     extract::{ConnectInfo, State},
@@ -76,6 +79,24 @@ fn open_memory(project_dir: &std::path::Path) -> Result<memory::Store, String> {
     memory::Store::open(path).map_err(|e| e.to_string())
 }
 
+/// A canvas mutation an agent asked for, on its way to the window that owns the canvas.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CanvasCommand {
+    pub request_id: String,
+    pub action: String,
+    pub params: Value,
+}
+
+/// How a command reaches the canvas. The bus cannot apply one itself: the canvas lives in the
+/// window and is its single writer, so this is a seam the Tauri layer fills with a window emit, and
+/// a test fills with a closure.
+pub type Emit = Arc<dyn Fn(CanvasCommand) + Send + Sync>;
+
+/// How long an agent waits for the canvas before being told to ask its human. Long enough for a
+/// busy renderer, short enough that a closed window does not hang the agent's turn.
+const CANVAS_TIMEOUT: Duration = Duration::from_secs(20);
+
 /// Shared bus state. Holds the same `TerminalManager` the Tauri commands hold, so a peer's live
 /// transcript and stdin are the exact ones on the canvas, and reads the canvas fresh per call so a
 /// wire pulled mid-session takes effect immediately.
@@ -87,14 +108,62 @@ pub struct Bus {
     project_dir: Arc<Mutex<PathBuf>>,
     /// Secret to node id. The map is the identity: holding a token is the only way to be that node.
     tokens: Mutex<HashMap<String, String>>,
+    emit: Emit,
+    /// Canvas commands still waiting on the window. The request id correlates the reply back to the
+    /// agent that is blocked on it.
+    pending: Mutex<HashMap<String, oneshot::Sender<Value>>>,
 }
 
 impl Bus {
-    pub fn new(manager: Arc<TerminalManager>, project_dir: Arc<Mutex<PathBuf>>) -> Self {
+    pub fn new(
+        manager: Arc<TerminalManager>,
+        project_dir: Arc<Mutex<PathBuf>>,
+        emit: Emit,
+    ) -> Self {
         Self {
             manager,
             project_dir,
             tokens: Mutex::new(HashMap::new()),
+            emit,
+            pending: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// The canvas answering a command it was asked to apply. Unknown ids are dropped: a reply to a
+    /// request that already timed out is late, not useful.
+    pub fn resolve_canvas(&self, request_id: &str, result: Value) {
+        if let Some(tx) = self.pending.lock().unwrap().remove(request_id) {
+            let _ = tx.send(result);
+        }
+    }
+
+    /// Ask the canvas to change, and wait for it to say what happened.
+    ///
+    /// I go through the window rather than writing `canvas.json` myself because the canvas is the
+    /// live state: the user is dragging these nodes right now, and a second writer would race the
+    /// debounced save and lose one of them. The window applies the change and saves, as it already
+    /// does for a human's edit, so an agent's edit and a human's edit take the same path.
+    async fn canvas_command(&self, action: &str, params: Value) -> Result<Value, String> {
+        let request_id = random_token();
+        let (tx, rx) = oneshot::channel();
+        self.pending.lock().unwrap().insert(request_id.clone(), tx);
+        (self.emit)(CanvasCommand {
+            request_id: request_id.clone(),
+            action: action.into(),
+            params,
+        });
+
+        match tokio::time::timeout(CANVAS_TIMEOUT, rx).await {
+            Ok(Ok(result)) => Ok(result),
+            // The window went away between the emit and the reply.
+            Ok(Err(_)) => Err("the canvas closed before it answered".into()),
+            Err(_) => {
+                // Drop the slot so a late reply does not sit in the map forever.
+                self.pending.lock().unwrap().remove(&request_id);
+                Err(format!(
+                    "the canvas did not answer {action} in time. Its window may be closed or on another workspace: ask your user to bring Identra to the front"
+                ))
+            }
         }
     }
 
@@ -173,7 +242,7 @@ async fn handle(
     let Some(id) = req.get("id").cloned() else {
         return StatusCode::ACCEPTED.into_response();
     };
-    match dispatch(&bus, &caller, method, req.get("params")) {
+    match dispatch(&bus, &caller, method, req.get("params")).await {
         Ok(result) => Json(json!({"jsonrpc": "2.0", "id": id, "result": result})).into_response(),
         Err((code, message)) => {
             Json(json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}}))
@@ -184,7 +253,7 @@ async fn handle(
 
 /// A protocol-level reply. Tool failures are not errors here: they come back as a normal
 /// `tools/call` result with `isError: true`, which is what an agent expects to read and react to.
-fn dispatch(
+async fn dispatch(
     bus: &Bus,
     caller: &str,
     method: &str,
@@ -202,7 +271,7 @@ fn dispatch(
         })),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({"tools": tool_specs()})),
-        "tools/call" => Ok(call_tool(bus, caller, params)),
+        "tools/call" => Ok(call_tool(bus, caller, params).await),
         other => Err((-32601, format!("method not found: {other}"))),
     }
 }
@@ -286,11 +355,45 @@ fn tool_specs() -> Value {
                 "properties": {"id": {"type": "integer"}, "note": {"type": "string"}},
                 "required": ["id"]
             }
+        },
+        {
+            "name": "list_canvas",
+            "description": "See every node on the canvas and how they are wired, including nodes you are not connected to. Use this to find out who is here before you bring on more agents.",
+            "inputSchema": {"type": "object", "properties": {}, "additionalProperties": false}
+        },
+        {
+            "name": "add_terminal",
+            "description": "Bring another agent onto the canvas to help, running as its own node. Use this when the work splits into parts that can run at the same time. The new agent is wired to you automatically, so you can send it work as soon as it starts. Put the work on the board first: a helper with nothing to claim just idles.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "agent": {"type": "string", "description": "Agent id, for example codex or claude. Defaults to your own kind."},
+                    "title": {"type": "string"}
+                }
+            }
+        },
+        {
+            "name": "connect_nodes",
+            "description": "Wire two nodes together so they can read and message each other. A node reads its tools when it starts, so wire before the other agent launches where you can.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"from": {"type": "string"}, "to": {"type": "string"}},
+                "required": ["from", "to"]
+            }
+        },
+        {
+            "name": "add_note",
+            "description": "Leave a note on the canvas for your user to read. Use it for something a human should see and decide on, not for talking to another agent.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"text": {"type": "string"}},
+                "required": ["text"]
+            }
         }
     ])
 }
 
-fn call_tool(bus: &Bus, caller: &str, params: Option<&Value>) -> Value {
+async fn call_tool(bus: &Bus, caller: &str, params: Option<&Value>) -> Value {
     let name = params
         .and_then(|p| p.get("name"))
         .and_then(Value::as_str)
@@ -423,7 +526,99 @@ fn call_tool(bus: &Bus, caller: &str, params: Option<&Value>) -> Value {
                 Err(e) => err_text(&e),
             }
         }
+        // The canvas tools ask the window to change something, and wait for it to say what happened.
+        // The window owns the canvas: the user is dragging these nodes right now, so a second writer
+        // here would race the debounced save. An agent's edit takes the same path a human's does.
+        "list_canvas" => {
+            // Read only, so I answer from the saved canvas rather than waking the window. Every node
+            // is listed, wired or not: an agent deciding whether to bring on help needs to see who
+            // is already here, which is not the same question as who it may talk to.
+            let peers = list_peers(caller, edges);
+            if canvas.nodes.is_empty() {
+                return ok_text("the canvas is empty");
+            }
+            let lines: Vec<String> = canvas
+                .nodes
+                .iter()
+                .map(|n| {
+                    let who = if n.id == caller {
+                        " (you)"
+                    } else if peers.iter().any(|p| p == &n.id) {
+                        " (wired to you)"
+                    } else {
+                        ""
+                    };
+                    let title = if n.title.is_empty() {
+                        &n.kind
+                    } else {
+                        &n.title
+                    };
+                    format!("- {} [{}] {}{}", n.id, n.kind, title, who)
+                })
+                .collect();
+            ok_text(&lines.join("\n"))
+        }
+        "add_terminal" => {
+            // Default to my own kind: an agent asking for help without naming one usually wants
+            // another of itself, and it is the one agent I know is installed and signed in.
+            let my_kind = canvas
+                .nodes
+                .iter()
+                .find(|n| n.id == caller)
+                .map(|n| n.kind.clone())
+                .unwrap_or_else(|| "codex".into());
+            let kind = match args.get("agent").and_then(Value::as_str) {
+                Some(a) if !a.is_empty() => a.to_string(),
+                _ => my_kind,
+            };
+            let params = json!({
+                "kind": kind,
+                "title": args.get("title").and_then(Value::as_str),
+                // Wiring the helper to its spawner is the whole point: an agent that cannot reach
+                // the one that called it is not help, it is a stranger.
+                "connectTo": caller,
+            });
+            match bus.canvas_command("add_terminal", params).await {
+                Ok(v) => canvas_reply(&v, |id| {
+                    format!("added {id} and wired it to you. Put work on the board so it has something to claim.")
+                }),
+                Err(e) => err_text(&e),
+            }
+        }
+        "connect_nodes" => {
+            let params = json!({"from": arg_str("from"), "to": arg_str("to")});
+            match bus.canvas_command("connect_nodes", params).await {
+                Ok(v) => canvas_reply(&v, |_| "wired".to_string()),
+                Err(e) => err_text(&e),
+            }
+        }
+        "add_note" => {
+            let text = arg_str("text");
+            if text.trim().is_empty() {
+                return err_text("a note needs some text");
+            }
+            match bus.canvas_command("add_note", json!({"text": text})).await {
+                Ok(v) => canvas_reply(&v, |id| format!("left note {id} on the canvas")),
+                Err(e) => err_text(&e),
+            }
+        }
         other => err_text(&format!("unknown tool: {other}")),
+    }
+}
+
+/// Turn the canvas's `{ok, id?, error?}` answer into something the agent can act on. A refusal from
+/// the canvas is a tool error, not a protocol one: the agent should read it and try something else.
+fn canvas_reply(result: &Value, say: impl Fn(&str) -> String) -> Value {
+    if result.get("ok").and_then(Value::as_bool) == Some(true) {
+        let id = result.get("id").and_then(Value::as_str).unwrap_or("");
+        ok_text(&say(id))
+    } else {
+        err_text(
+            result
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("the canvas refused that"),
+        )
     }
 }
 
@@ -537,9 +732,30 @@ mod tests {
     use super::*;
     use identra_core::canvas::{Canvas, Edge, Node};
 
+    /// A bus whose canvas never answers. Fine for every tool that does not touch the canvas.
     fn bus_in(dir: PathBuf) -> Bus {
         let manager = Arc::new(TerminalManager::new(Arc::new(|_id, _out| {})));
-        Bus::new(manager, Arc::new(Mutex::new(dir)))
+        Bus::new(manager, Arc::new(Mutex::new(dir)), Arc::new(|_cmd| {}))
+    }
+
+    /// A bus with a stand-in for the window: it answers every canvas command with `reply`, the way
+    /// a real canvas would after applying it. The emitter needs the bus it will answer, and the bus
+    /// needs the emitter, so I hand the closure a weak slot and fill it once both exist.
+    ///
+    /// Answering inside the emit is not a cheat: a oneshot accepts its value before anyone awaits
+    /// it, so this exercises the same send and receive the real path uses.
+    fn bus_with_canvas(dir: PathBuf, reply: Value) -> Arc<Bus> {
+        let slot: Arc<Mutex<Option<std::sync::Weak<Bus>>>> = Arc::new(Mutex::new(None));
+        let seen = slot.clone();
+        let emit: Emit = Arc::new(move |cmd: CanvasCommand| {
+            if let Some(bus) = seen.lock().unwrap().as_ref().and_then(|w| w.upgrade()) {
+                bus.resolve_canvas(&cmd.request_id, reply.clone());
+            }
+        });
+        let manager = Arc::new(TerminalManager::new(Arc::new(|_id, _out| {})));
+        let bus = Arc::new(Bus::new(manager, Arc::new(Mutex::new(dir)), emit));
+        *slot.lock().unwrap() = Some(Arc::downgrade(&bus));
+        bus
     }
 
     #[test]
@@ -565,8 +781,8 @@ mod tests {
         assert_eq!(header(&HeaderMap::new(), config::TOKEN_HEADER), None);
     }
 
-    #[test]
-    fn initialize_echoes_version_and_lists_the_tools() {
+    #[tokio::test]
+    async fn initialize_echoes_version_and_lists_the_tools() {
         let bus = bus_in(std::env::temp_dir());
         let init = dispatch(
             &bus,
@@ -574,17 +790,21 @@ mod tests {
             "initialize",
             Some(&json!({"protocolVersion": "2025-03-26"})),
         )
+        .await
         .unwrap();
         assert_eq!(init["protocolVersion"], "2025-03-26");
         assert_eq!(init["serverInfo"]["name"], "identra-bus");
 
-        let list = dispatch(&bus, "node-a", "tools/list", None).unwrap();
+        let list = dispatch(&bus, "node-a", "tools/list", None).await.unwrap();
         let names: Vec<&str> = list["tools"]
             .as_array()
             .unwrap()
             .iter()
             .map(|t| t["name"].as_str().unwrap())
             .collect();
+        // The whole surface an agent is handed, in the order it reads them. Four groups: who is
+        // here and how to reach them, what the project knows, what work is up for grabs, and how to
+        // change the canvas itself.
         assert_eq!(
             names,
             [
@@ -596,43 +816,51 @@ mod tests {
                 "add_task",
                 "list_tasks",
                 "claim_task",
-                "complete_task"
+                "complete_task",
+                "list_canvas",
+                "add_terminal",
+                "connect_nodes",
+                "add_note",
             ]
         );
 
-        assert!(dispatch(&bus, "node-a", "nonsense", None).is_err());
+        assert!(dispatch(&bus, "node-a", "nonsense", None).await.is_err());
     }
 
-    #[test]
-    fn memory_carries_across_agents_and_sessions() {
+    #[tokio::test]
+    async fn memory_carries_across_agents_and_sessions() {
         let dir = std::env::temp_dir().join(format!("identra-mem-tool-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let bus = bus_in(dir.clone());
 
-        let add = |caller: &str, text: &str| {
+        async fn add(bus: &Bus, caller: &str, text: &str) -> Value {
             call_tool(
-                &bus,
+                bus,
                 caller,
                 Some(&json!({"name": "add_memory", "arguments": {"text": text}})),
             )
-        };
-        let find = |caller: &str, query: &str| {
+            .await
+        }
+        async fn find(bus: &Bus, caller: &str, query: &str) -> Value {
             call_tool(
-                &bus,
+                bus,
                 caller,
                 Some(&json!({"name": "search_memory", "arguments": {"query": query}})),
             )
-        };
+            .await
+        }
 
         let out = add(
+            &bus,
             "node-a",
             "we dropped redis and use postgres listen/notify instead",
-        );
+        )
+        .await;
         assert_eq!(out["isError"], false);
 
         // The payoff: a different node, in a later session, wired to nobody, still knows. This is
         // the whole reason memory is not edge gated.
-        let hit = find("node-b", "redis");
+        let hit = find(&bus, "node-b", "redis").await;
         assert_eq!(hit["isError"], false);
         assert!(
             hit["content"][0]["text"]
@@ -644,50 +872,128 @@ mod tests {
 
         // Re learning a known fact is a no op, so a chatty agent cannot fill the pool with copies.
         let again = add(
+            &bus,
             "node-b",
             "we dropped redis and use postgres listen/notify instead",
-        );
+        )
+        .await;
         assert!(again["content"][0]["text"]
             .as_str()
             .unwrap()
             .contains("already remembered"));
 
         // A miss says so plainly rather than returning an empty list the agent has to interpret.
-        let miss = find("node-a", "kubernetes");
+        let miss = find(&bus, "node-a", "kubernetes").await;
         assert!(miss["content"][0]["text"]
             .as_str()
             .unwrap()
             .contains("nothing remembered"));
 
         // Empty text is a caller mistake, and silently storing it would poison recall.
-        assert_eq!(add("node-a", "   ")["isError"], true);
+        assert_eq!(add(&bus, "node-a", "   ").await["isError"], true);
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    #[test]
-    fn two_agents_split_a_board_without_doing_the_same_work() {
+    #[tokio::test]
+    async fn an_agent_can_bring_on_help_and_is_wired_to_it() {
+        let dir = std::env::temp_dir().join(format!("identra-spawn-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        canvas::save(
+            &dir,
+            &Canvas {
+                nodes: vec![Node {
+                    id: "a".into(),
+                    kind: "claude".into(),
+                    x: 0.0,
+                    y: 0.0,
+                    width: 480.0,
+                    height: 320.0,
+                    title: "Lead".into(),
+                    cwd: None,
+                }],
+                ..Canvas::default()
+            },
+        )
+        .unwrap();
+
+        // Stand in for the window, and record what it was asked for: I want to assert the request,
+        // not just the answer, because the request is where the wiring decision lives.
+        let seen: Arc<Mutex<Vec<CanvasCommand>>> = Arc::new(Mutex::new(Vec::new()));
+        let slot: Arc<Mutex<Option<std::sync::Weak<Bus>>>> = Arc::new(Mutex::new(None));
+        let (w, log) = (slot.clone(), seen.clone());
+        let emit: Emit = Arc::new(move |cmd: CanvasCommand| {
+            log.lock().unwrap().push(cmd.clone());
+            if let Some(b) = w.lock().unwrap().as_ref().and_then(|x| x.upgrade()) {
+                b.resolve_canvas(&cmd.request_id, json!({"ok": true, "id": "helper-1"}));
+            }
+        });
+        let manager = Arc::new(TerminalManager::new(Arc::new(|_id, _out| {})));
+        let bus = Arc::new(Bus::new(manager, Arc::new(Mutex::new(dir.clone())), emit));
+        *slot.lock().unwrap() = Some(Arc::downgrade(&bus));
+
+        let out = call_tool(&bus, "a", Some(&json!({"name": "add_terminal"}))).await;
+        assert_eq!(out["isError"], false, "spawn should succeed: {out}");
+        assert!(out["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("helper-1"));
+
+        // Copy out of the lock before the next await, so the guard never spans one.
+        let (action, kind, connect_to, count) = {
+            let cmds = seen.lock().unwrap();
+            (
+                cmds[0].action.clone(),
+                cmds[0].params["kind"].clone(),
+                cmds[0].params["connectTo"].clone(),
+                cmds.len(),
+            )
+        };
+        assert_eq!(count, 1);
+        assert_eq!(action, "add_terminal");
+        // Defaulting to the caller's own kind: the one agent I know is installed and signed in.
+        assert_eq!(kind, "claude");
+        // The helper is wired back to whoever asked for it. An agent that cannot reach its caller
+        // is not help.
+        assert_eq!(connect_to, "a");
+
+        // A canvas that refuses says why, and the agent hears it as a tool error it can act on.
+        let refusing =
+            bus_with_canvas(dir.clone(), json!({"ok": false, "error": "canvas is full"}));
+        let out = call_tool(
+            &refusing,
+            "a",
+            Some(&json!({"name": "add_note", "arguments": {"text": "look at this"}})),
+        )
+        .await;
+        assert_eq!(out["isError"], true);
+        assert!(out["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("canvas is full"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn two_agents_split_a_board_without_doing_the_same_work() {
         let dir = std::env::temp_dir().join(format!("identra-board-tool-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let bus = bus_in(dir.clone());
 
-        let call = |caller: &str, args: Value| call_tool(&bus, caller, Some(&args));
+        async fn call(bus: &Bus, caller: &str, args: Value) -> Value {
+            call_tool(bus, caller, Some(&args)).await
+        }
         let text = |v: &Value| v["content"][0]["text"].as_str().unwrap().to_string();
 
         // One agent plans the work: the test cannot start until the route exists.
-        let r = call(
-            "a",
-            json!({"name": "add_task", "arguments": {"description": "write GET /health in src/health.rs"}}),
-        );
+        let r = call(&bus, "a", json!({"name": "add_task", "arguments": {"description": "write GET /health in src/health.rs"}})).await;
         assert_eq!(text(&r), "added t1");
-        let r = call(
-            "a",
-            json!({"name": "add_task", "arguments": {"description": "test it in tests/health.rs", "after": [1]}}),
-        );
+        let r = call(&bus, "a", json!({"name": "add_task", "arguments": {"description": "test it in tests/health.rs", "after": [1]}})).await;
         assert_eq!(text(&r), "added t2");
 
         // The other agent sees the same board. That is the point of it being shared.
-        let board = text(&call("b", json!({"name": "list_tasks"})));
+        let board = text(&call(&bus, "b", json!({"name": "list_tasks"})).await);
         assert!(board.contains("- t1 [open, claimable] write GET /health"));
         assert!(board.contains("- t2 [blocked by t1]"));
 
@@ -697,12 +1003,21 @@ mod tests {
         // Whether b could take t1 off a depends on the live node set, and no PTY runs in this test,
         // so every claim here looks abandoned. The tasks tests cover that rule with an explicit live
         // set; I assert only what the live set cannot change.
-        assert!(text(&call(
-            "a",
-            json!({"name": "claim_task", "arguments": {"id": 1}})
-        ))
+        assert!(text(
+            &call(
+                &bus,
+                "a",
+                json!({"name": "claim_task", "arguments": {"id": 1}})
+            )
+            .await
+        )
         .contains("claimed t1"));
-        let b_tried = call("b", json!({"name": "claim_task", "arguments": {"id": 2}}));
+        let b_tried = call(
+            &bus,
+            "b",
+            json!({"name": "claim_task", "arguments": {"id": 2}}),
+        )
+        .await;
         assert_eq!(b_tried["isError"], true);
         assert!(
             text(&b_tried).contains("blocked until t1"),
@@ -711,28 +1026,35 @@ mod tests {
         );
 
         // Finishing the route tells a that b now has something to do.
-        let done = text(&call(
-            "a",
-            json!({"name": "complete_task", "arguments": {"id": 1, "note": "returns 200 ok"}}),
-        ));
+        let done = text(
+            &call(
+                &bus,
+                "a",
+                json!({"name": "complete_task", "arguments": {"id": 1, "note": "returns 200 ok"}}),
+            )
+            .await,
+        );
         assert!(done.contains("done t1"));
         assert!(done.contains("now unblocked: t2"), "got: {done}");
 
         // And b can now take it.
-        assert!(text(&call(
-            "b",
-            json!({"name": "claim_task", "arguments": {"id": 2}})
-        ))
+        assert!(text(
+            &call(
+                &bus,
+                "b",
+                json!({"name": "claim_task", "arguments": {"id": 2}})
+            )
+            .await
+        )
         .contains("claimed t2"));
-        assert!(
-            text(&call("b", json!({"name": "list_tasks"}))).contains("- t1 [done: returns 200 ok]")
-        );
+        assert!(text(&call(&bus, "b", json!({"name": "list_tasks"})).await)
+            .contains("- t1 [done: returns 200 ok]"));
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    #[test]
-    fn list_peers_reads_the_edge_and_title_from_the_canvas() {
+    #[tokio::test]
+    async fn list_peers_reads_the_edge_and_title_from_the_canvas() {
         let dir = std::env::temp_dir().join(format!("identra-bus-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let node = |id: &str, title: &str| Node {
@@ -758,7 +1080,7 @@ mod tests {
         canvas::save(&dir, &canvas).unwrap();
 
         let bus = bus_in(dir.clone());
-        let out = call_tool(&bus, "a", Some(&json!({"name": "list_peers"})));
+        let out = call_tool(&bus, "a", Some(&json!({"name": "list_peers"}))).await;
         assert_eq!(out["isError"], false);
         let text = out["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("b\tTests"), "peer id and title: got {text}");
@@ -768,7 +1090,8 @@ mod tests {
             &bus,
             "a",
             Some(&json!({"name": "send_to_node", "arguments": {"nodeId": "zzz", "text": "hi"}})),
-        );
+        )
+        .await;
         assert_eq!(refused["isError"], true);
 
         std::fs::remove_dir_all(&dir).unwrap();

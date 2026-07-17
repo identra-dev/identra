@@ -342,3 +342,27 @@ body {
   backdrop-filter: blur(6px);
   pointer-events: none;
 }
+
+/* A note an agent left for its human. Deliberately unlike a node: no chrome, no ports, nothing to
+   wire. Yaru's paper yellow so it reads as a sticky on the desk, not another window. */
+.identra-note {
+  width: 100%;
+  height: 100%;
+  background: #f9e2af;
+  color: #2a2118;
+  border-radius: 8px;
+  padding: 12px 14px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  overflow: auto;
+}
+.identra-note__body {
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.react-flow__node-note {
+  padding: 0;
+  border: none;
+  background: transparent;
+}

@@ -17,21 +17,26 @@ import "@xyflow/react/dist/style.css";
 import "@xterm/xterm/css/xterm.css";
 import AgentNode, { type AgentNodeData } from "./AgentNode";
 import BrowserNode from "./BrowserNode";
+import NoteNode from "./NoteNode";
 import WorkspacePicker from "./WorkspacePicker";
 import { AgentIcon } from "./icons";
 import {
+  canvasCommandResult,
   canvasSave,
   detectAgents,
+  onCanvasCommand,
   terminalKill,
   workspaceOpen,
   type AgentInfo,
+  type CanvasCommand,
   type CanvasNode,
+  type CanvasResult,
   type WorkspaceMeta,
 } from "./api";
 
 type FNode = Node<AgentNodeData>;
 
-const nodeTypes = { agent: AgentNode, browser: BrowserNode };
+const nodeTypes = { agent: AgentNode, browser: BrowserNode, note: NoteNode };
 const DEFAULT_W = 480;
 const DEFAULT_H = 320;
 
@@ -40,7 +45,7 @@ const DEFAULT_H = 320;
 function toFlow(n: CanvasNode): FNode {
   return {
     id: n.id,
-    type: n.kind === "browser" ? "browser" : "agent",
+    type: n.kind === "browser" || n.kind === "note" ? n.kind : "agent",
     position: { x: n.x, y: n.y },
     data: { title: n.title, cwd: n.cwd, kind: n.kind },
     style: { width: n.width || DEFAULT_W, height: n.height || DEFAULT_H },
@@ -72,9 +77,15 @@ export default function App() {
   const edgesRef = useRef<FEdge[]>([]);
   const titleRef = useRef("");
   const saveTimer = useRef<number | undefined>(undefined);
+  // The canvas-command handler runs outside React's render, so it reads agents from a ref rather
+  // than closing over state that would be stale by the time an agent calls.
+  const agentsRef = useRef<AgentInfo[]>([]);
 
   useEffect(() => {
-    void detectAgents().then(setAgents);
+    void detectAgents().then((list) => {
+      agentsRef.current = list;
+      setAgents(list);
+    });
   }, []);
 
   // Opening is what makes a workspace active in the engine: it repoints the canvas, and writes the
@@ -148,20 +159,24 @@ export default function App() {
     for (const n of deleted) void terminalKill(n.id);
   }, []);
 
+  // Returns the new node's id, because an agent that asked for this needs to be able to name it.
   const addNode = useCallback(
-    (kind: string, title: string, cwd: string | null = null) => {
+    (kind: string, title: string, cwd: string | null = null, at?: { x: number; y: number }) => {
       const vp = viewport.current;
       // Drop the node near the middle of what's currently on screen.
-      const x = (-vp.x + window.innerWidth / 2 - DEFAULT_W / 2) / vp.zoom;
-      const y = (-vp.y + window.innerHeight / 2 - DEFAULT_H / 2) / vp.zoom;
+      const spot = at ?? {
+        x: (-vp.x + window.innerWidth / 2 - DEFAULT_W / 2) / vp.zoom,
+        y: (-vp.y + window.innerHeight / 2 - DEFAULT_H / 2) / vp.zoom,
+      };
+      const id = crypto.randomUUID();
       setNodes((cur) => {
         const next = [
           ...cur,
           toFlow({
-            id: crypto.randomUUID(),
+            id,
             kind,
-            x,
-            y,
+            x: spot.x,
+            y: spot.y,
             width: DEFAULT_W,
             height: DEFAULT_H,
             title,
@@ -172,9 +187,89 @@ export default function App() {
         scheduleSave();
         return next;
       });
+      return id;
     },
     [scheduleSave],
   );
+
+  const wire = useCallback(
+    (from: string, to: string) => {
+      setEdges((cur) => {
+        const next = addEdge(
+          { source: from, target: to, sourceHandle: null, targetHandle: null },
+          cur,
+        );
+        edgesRef.current = next;
+        scheduleSave();
+        return next;
+      });
+    },
+    [scheduleSave],
+  );
+
+  // An agent asking the canvas to change. The canvas is the single writer of its own state, so the
+  // engine sends the request here rather than editing canvas.json underneath us, and we answer.
+  // Every branch must reply exactly once: an agent is blocked on this until it hears back.
+  const applyCanvasCommand = useCallback(
+    (cmd: CanvasCommand): CanvasResult => {
+      const p = cmd.params;
+      switch (cmd.action) {
+        case "add_terminal": {
+          const kind = typeof p.kind === "string" ? p.kind : "codex";
+          const known = agentsRef.current.find((a) => a.id === kind);
+          // Refuse rather than drop a node that can never run. The agent gets a reason it can act
+          // on, which is better than a broken node appearing on the user's canvas.
+          if (!known) return { ok: false, error: `no agent called ${kind} is known here` };
+          if (!known.available) {
+            return { ok: false, error: `${known.name} is not installed on this machine` };
+          }
+          // Place a spawned node below its parent so a fan-out reads as a tree, not a pile.
+          const parent = nodesRef.current.find((n) => n.id === p.connectTo);
+          const at = parent
+            ? { x: parent.position.x, y: parent.position.y + DEFAULT_H + 60 }
+            : undefined;
+          const title = typeof p.title === "string" && p.title ? p.title : known.name;
+          const id = addNode(kind, title, null, at);
+          if (typeof p.connectTo === "string" && p.connectTo) wire(p.connectTo, id);
+          return { ok: true, id };
+        }
+        case "connect_nodes": {
+          const { from, to } = p as { from?: string; to?: string };
+          const has = (id?: string) => nodesRef.current.some((n) => n.id === id);
+          if (!has(from) || !has(to)) {
+            return { ok: false, error: "one of those nodes is not on the canvas" };
+          }
+          if (from === to) return { ok: false, error: "a node cannot be wired to itself" };
+          wire(from as string, to as string);
+          return { ok: true, id: `${from}->${to}` };
+        }
+        case "add_note": {
+          const text = typeof p.text === "string" ? p.text : "";
+          if (!text.trim()) return { ok: false, error: "a note needs some text" };
+          return { ok: true, id: addNode("note", text) };
+        }
+        default:
+          return { ok: false, error: `the canvas does not know how to ${cmd.action}` };
+      }
+    },
+    [addNode, wire],
+  );
+
+  useEffect(() => {
+    const un = onCanvasCommand((cmd) => {
+      let result: CanvasResult;
+      try {
+        result = applyCanvasCommand(cmd);
+      } catch (e) {
+        // Never leave the agent hanging on our bug: it waits on this reply.
+        result = { ok: false, error: String(e) };
+      }
+      void canvasCommandResult(cmd.requestId, result);
+    });
+    return () => {
+      void un.then((f) => f());
+    };
+  }, [applyCanvasCommand]);
 
   if (!workspace) {
     return <WorkspacePicker onOpen={(w) => void openWorkspace(w)} />;

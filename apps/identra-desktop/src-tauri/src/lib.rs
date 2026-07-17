@@ -137,6 +137,13 @@ fn canvas_save(state: State<AppState>, canvas: Canvas) -> Result<(), String> {
     canvas::save(&state.dir(), &canvas).map_err(|e| e.to_string())
 }
 
+/// The canvas reporting what it did with a command an agent asked for. The request id is what
+/// matches this answer to the agent still waiting on it.
+#[tauri::command]
+fn canvas_command_result(state: State<AppState>, request_id: String, result: serde_json::Value) {
+    state.bus.resolve_canvas(&request_id, result);
+}
+
 #[tauri::command]
 fn workspace_list() -> Result<Vec<WorkspaceMeta>, String> {
     let root = workspaces_root()?;
@@ -198,7 +205,13 @@ pub fn run() {
             // Bring the bus up before the window is interactive, so its port is known when a
             // workspace opens and writes the config the agents read at launch.
             let (listener, mcp_port) = identra_mcp::server::bind()?;
-            let bus = Arc::new(Bus::new(manager.clone(), project_dir.clone()));
+            // How an agent's canvas request reaches the canvas. The window owns that state and is
+            // its only writer, so the bus asks rather than writes, and waits for the answer.
+            let canvas_handle: AppHandle = app.handle().clone();
+            let emit: identra_mcp::server::Emit = Arc::new(move |cmd| {
+                let _ = canvas_handle.emit("canvas://command", cmd);
+            });
+            let bus = Arc::new(Bus::new(manager.clone(), project_dir.clone(), emit));
             let bus_for_task = bus.clone();
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = identra_mcp::server::serve(listener, bus_for_task).await {
@@ -223,6 +236,7 @@ pub fn run() {
             terminal_kill,
             canvas_load,
             canvas_save,
+            canvas_command_result,
             workspace_list,
             workspace_create,
             workspace_open
