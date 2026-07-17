@@ -1,7 +1,7 @@
 import { memo, useState } from "react";
 import { Handle, Position, useReactFlow, type NodeProps } from "@xyflow/react";
 import type { AgentNodeData } from "./AgentNode";
-import { iconFor } from "./icons";
+import { AgentIcon } from "./icons";
 
 // A web view on the canvas: same window chrome as an agent node, but the body is an iframe and
 // there is no PTY — kind === "browser" never calls terminal_start. The URL rides in the node's
@@ -19,7 +19,6 @@ function BrowserNodeImpl({ id, data }: NodeProps) {
     updateNodeData(id, { cwd: next }); // routes through onNodesChange, so it saves with the canvas
   };
 
-  const icon = iconFor("browser");
   return (
     <div className="identra-node">
       <Handle type="target" position={Position.Left} className="identra-port" />
@@ -29,9 +28,7 @@ function BrowserNodeImpl({ id, data }: NodeProps) {
         className="identra-port"
       />
       <div className="identra-node__header">
-        <span className="identra-node__icon" style={{ background: icon.tile }}>
-          {icon.glyph}
-        </span>
+        <AgentIcon kind="browser" className="identra-node__icon" />
         <input
           className="identra-node__url nodrag"
           value={draft}

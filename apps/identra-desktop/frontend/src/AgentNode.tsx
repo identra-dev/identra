@@ -12,7 +12,7 @@ import {
   type OutputEvent,
 } from "./api";
 import { pastSnapshot } from "./reattach";
-import { iconFor } from "./icons";
+import { AgentIcon } from "./icons";
 
 // `kind` is the agent id (codex, claude, …); the node resolves its binary and args from it.
 export type AgentNodeData = { title: string; cwd: string | null; kind: string };
@@ -97,6 +97,7 @@ function AgentNodeImpl({ id, data }: NodeProps) {
           try {
             await terminalStart(
               id,
+              nodeData.kind,
               agent.cmd,
               agent.args,
               nodeData.cwd,
@@ -142,7 +143,6 @@ function AgentNodeImpl({ id, data }: NodeProps) {
     };
   }, [id]);
 
-  const icon = iconFor(nodeData.kind);
   return (
     <div className="identra-node">
       <Handle type="target" position={Position.Left} className="identra-port" />
@@ -153,9 +153,7 @@ function AgentNodeImpl({ id, data }: NodeProps) {
       />
       <div className="identra-node__header">
         <span className="identra-node__dot" data-state={state} />
-        <span className="identra-node__icon" style={{ background: icon.tile }}>
-          {icon.glyph}
-        </span>
+        <AgentIcon kind={nodeData.kind} className="identra-node__icon" />
         <span className="identra-node__title">
           {nodeData.title || nodeData.kind}
         </span>

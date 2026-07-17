@@ -89,7 +89,14 @@ body {
     opacity: 0.35;
   }
 }
-/* 20px brand tile, shared by node headers and dock buttons. */
+/* 20px brand tile, shared by node headers and dock buttons. The mark inside is an svg using
+   currentColor, so the tile's own color drives the ink and a lettermark fallback matches it. */
+.identra-node__icon svg,
+.identra-dock__tile svg {
+  width: 13px;
+  height: 13px;
+  display: block;
+}
 .identra-node__icon,
 .identra-dock__tile {
   display: inline-flex;
@@ -101,7 +108,6 @@ body {
   font-size: 10px;
   font-weight: 700;
   line-height: 1;
-  color: #fff;
   flex: none;
 }
 .identra-node__title {
@@ -224,4 +230,115 @@ body {
 .identra-dock__dot[data-state="missing"] {
   background: transparent;
   box-shadow: inset 0 0 0 1.5px var(--state-missing);
+}
+
+/* The workspace picker: the first surface, before there is any canvas to show. Yaru panel on the
+   same dark ground as the canvas, so opening a workspace feels like the same app, not a splash. */
+.identra-picker {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  padding: 24px;
+}
+.identra-picker__panel {
+  width: 100%;
+  max-width: 420px;
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  border-radius: 10px;
+  padding: 28px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+}
+.identra-picker__title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+}
+.identra-picker__sub {
+  margin: 6px 0 20px;
+  color: #b8b8b8;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.identra-picker__empty {
+  margin: 0 0 16px;
+  color: #9a9a9a;
+  font-size: 13px;
+}
+.identra-picker__list {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.identra-picker__row {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 9px 10px;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.identra-picker__row:hover {
+  background: var(--header);
+  border-color: var(--panel-edge);
+}
+.identra-picker__name {
+  font-size: 14px;
+}
+/* The path is the honest part: a workspace is a folder, so say which one. */
+.identra-picker__path {
+  font-size: 11px;
+  color: #8f8f8f;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.identra-picker__new {
+  width: 100%;
+  background: var(--yaru-orange);
+  color: #fff;
+  border: 0;
+  border-radius: 6px;
+  padding: 10px 14px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.identra-picker__new:hover {
+  filter: brightness(1.08);
+}
+.identra-picker__new:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.identra-picker__error {
+  margin: 12px 0 0;
+  color: #f66151;
+  font-size: 12px;
+}
+
+/* Which workspace you are in, top left, out of the way of the canvas. */
+.identra-workspace {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  background: rgba(44, 44, 44, 0.86);
+  border: 1px solid var(--panel-edge);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 12px;
+  color: var(--text);
+  backdrop-filter: blur(6px);
+  pointer-events: none;
 }
