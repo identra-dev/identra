@@ -1,0 +1,10 @@
+[package]
+name = "identra-memory"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Identra's memory layer: add/search/get/delete over a local SQLite store with pluggable embeddings."
+
+[dependencies]
+rusqlite = { version = "0.40.1", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
