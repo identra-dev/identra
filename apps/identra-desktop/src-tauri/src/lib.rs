@@ -181,25 +181,45 @@ fn board_list(state: State<AppState>) -> Result<Vec<identra_mcp::tasks::Task>, S
     identra_mcp::tasks::Board::open(&state.dir())?.list()
 }
 
+/// The project scope for a memory filter: the workspace folder name, matching how the bus scopes
+/// what the agents write, so the panel reads the same pool the agents do.
+fn memory_filter(dir: &std::path::Path) -> identra_memory::Filter {
+    let user_id = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "workspace".into());
+    identra_memory::Filter {
+        user_id: Some(user_id),
+        ..Default::default()
+    }
+}
+
 /// What the project has learned, newest first. Same argument as the board: memory that only agents
 /// can read is memory the user cannot check, correct, or trust.
 #[tauri::command]
 fn memory_list(state: State<AppState>, limit: Option<usize>) -> Result<Vec<Memory>, String> {
     let dir = state.dir();
-    let store = identra_memory::Store::open(identra_mcp::server::memory_path(&dir))
-        .map_err(|e| e.to_string())?;
-    let scope = dir
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "workspace".into());
+    // Through the bus opener, not Store::open, so the panel sees the same store the agents do,
+    // embedder and all. Browsing does not use the embedder, but going through one door means the
+    // human's list and the human's search cannot drift apart.
+    let store = identra_mcp::server::open_memory(&dir)?;
     store
-        .recent(
-            &identra_memory::Filter {
-                user_id: Some(scope),
-                ..Default::default()
-            },
-            limit.unwrap_or(50),
-        )
+        .recent(&memory_filter(&dir), limit.unwrap_or(50))
+        .map_err(|e| e.to_string())
+}
+
+/// Search what the project has learned. Same ranking the agents get: with a model, by meaning;
+/// without one, by words. This is why it goes through the bus opener rather than a bare store.
+#[tauri::command]
+fn memory_search(
+    state: State<AppState>,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<Memory>, String> {
+    let dir = state.dir();
+    let store = identra_mcp::server::open_memory(&dir)?;
+    store
+        .search(&memory_filter(&dir), &query, limit.unwrap_or(50))
         .map_err(|e| e.to_string())
 }
 
@@ -434,6 +454,7 @@ pub fn run() {
             canvas_command_result,
             board_list,
             memory_list,
+            memory_search,
             workspace_list,
             workspace_create,
             workspace_open,

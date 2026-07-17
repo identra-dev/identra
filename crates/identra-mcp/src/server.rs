@@ -118,7 +118,12 @@ fn shared_embedder() -> Option<std::sync::Arc<dyn memory::Embedder>> {
 /// I open per call rather than holding a connection on the bus: `Connection` is not `Sync`, these
 /// are low frequency calls, and opening SQLite is cheap. A cached connection behind a mutex would
 /// be a lock to reason about for no gain I can measure.
-fn open_memory(project_dir: &std::path::Path) -> Result<memory::Store, String> {
+///
+/// Public because the desktop reads this same memory for the human's panel, and it has to read it
+/// the way the agents do: same embedder, so the human searching "auth" and an agent searching it
+/// get the same answer. The embedder is a process wide `OnceLock`, so the app and its bus share the
+/// one model rather than loading it twice.
+pub fn open_memory(project_dir: &std::path::Path) -> Result<memory::Store, String> {
     let path = memory_path(project_dir);
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;

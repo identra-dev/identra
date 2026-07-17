@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import { boardList, memoryList, type Memory, type Task } from "./api";
+import {
+  boardList,
+  memoryList,
+  memorySearch,
+  type Memory,
+  type Task,
+} from "./api";
 
 // What the agents are coordinating on, for the person watching them.
 //
@@ -19,6 +25,10 @@ export default function WorkPanel({ onClose }: { onClose: () => void }) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [memories, setMemories] = useState<Memory[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // Empty means "show everything, newest first" (the polled list). A query switches the memory tab
+  // over to ranked search results, so the human can ask the same question an agent would.
+  const [query, setQuery] = useState("");
+  const [hits, setHits] = useState<Memory[]>([]);
 
   const refresh = useCallback(async () => {
     try {
@@ -36,6 +46,24 @@ export default function WorkPanel({ onClose }: { onClose: () => void }) {
     const timer = window.setInterval(() => void refresh(), POLL_MS);
     return () => window.clearInterval(timer);
   }, [refresh]);
+
+  // Debounced, because with a model attached every search is an embed, and one per keystroke would
+  // be wasteful for no gain the eye can see. A blank query clears back to the browse list.
+  useEffect(() => {
+    const q = query.trim();
+    if (q === "") {
+      setHits([]);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void memorySearch(q, 50)
+        .then(setHits)
+        .catch((e) => setError(String(e)));
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [query]);
+
+  const shownMemories = query.trim() === "" ? memories : hits;
 
   const state = (t: Task) => {
     if (t.done) return "done";
@@ -109,19 +137,31 @@ export default function WorkPanel({ onClose }: { onClose: () => void }) {
             ))}
           </ul>
         )
-      ) : memories.length === 0 ? (
-        <p className="identra-panel__empty">
-          Nothing remembered yet. Agents record decisions and constraints here,
-          and every agent you open afterwards starts from them.
-        </p>
       ) : (
-        <ul className="identra-panel__list">
-          {memories.map((m) => (
-            <li key={m.id} className="identra-memory">
-              {m.content}
-            </li>
-          ))}
-        </ul>
+        <>
+          <input
+            className="identra-panel__search"
+            type="search"
+            placeholder="Search what the project knows"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          {shownMemories.length === 0 ? (
+            <p className="identra-panel__empty">
+              {query.trim() === ""
+                ? "Nothing remembered yet. Agents record decisions and constraints here, and every agent you open afterwards starts from them."
+                : "Nothing matched. The closest facts still show for an agent asking over the bus; here, a blank search brings the whole list back."}
+            </p>
+          ) : (
+            <ul className="identra-panel__list">
+              {shownMemories.map((m) => (
+                <li key={m.id} className="identra-memory">
+                  {m.content}
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
       )}
     </aside>
   );

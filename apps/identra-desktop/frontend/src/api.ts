@@ -114,6 +114,9 @@ export const boardList = () => invoke<Task[]>("board_list");
 export const memoryList = (limit?: number) =>
   invoke<Memory[]>("memory_list", { limit: limit ?? null });
 
+export const memorySearch = (query: string, limit?: number) =>
+  invoke<Memory[]>("memory_search", { query, limit: limit ?? null });
+
 export const workspaceList = () => invoke<WorkspaceMeta[]>("workspace_list");
 
 // Creating a workspace makes the folder, writes a blank canvas into it, and makes it active. The
