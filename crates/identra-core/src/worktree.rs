@@ -172,8 +172,10 @@ pub fn isolate(dir: &Path, slug: &str, base: &Path) -> Result<Isolated, Error> {
     link_modules(&root, &path);
     link_modules(dir, &workdir);
     carry_files(&root, &path);
+    link_agent_config(&root, &path);
     if relative != Path::new("") {
         carry_files(dir, &workdir);
+        link_agent_config(dir, &workdir);
     }
 
     Ok(Isolated {
@@ -192,6 +194,44 @@ fn link_modules(from: &Path, to: &Path) {
     }
     #[cfg(unix)]
     let _ = std::os::unix::fs::symlink(&src, &dst);
+}
+
+/// Project level agent config, the directories a CLI reads its per project skills and rules out of.
+///
+/// A worktree is a checkout of tracked files, and a project's `.claude/` is very often gitignored or
+/// simply untracked, so an isolated agent silently loses the skills the same agent has in the main
+/// checkout. It still has its global ones, since HOME is shared, which is what makes this so hard to
+/// spot: the agent works, it is just quietly worse at this repo than the one running next to it. The
+/// user did not ask for a diminished agent, they asked for a separate checkout.
+const AGENT_CONFIG: &[&str] = &[
+    ".claude",
+    ".codex",
+    ".cursor",
+    ".gemini",
+    ".goose",
+    ".opencode",
+];
+
+/// Link the project's agent config into the worktree, so an isolated agent is the same agent.
+///
+/// Linked rather than copied, and this is the opposite call to the one CARRY makes, on purpose. A
+/// lockfile is branch state and an agent editing one must not reach the main checkout. Skills are
+/// not branch state: they are how this project wants its agents to behave, and an isolated agent
+/// reading the same ones is right. It also means a skill edited during the session is not stale in
+/// the worktree, and that removing the worktree removes a link and never the original.
+fn link_agent_config(from: &Path, to: &Path) {
+    if !to.is_dir() {
+        return;
+    }
+    for name in AGENT_CONFIG {
+        let src = from.join(name);
+        let dst = to.join(name);
+        if !src.is_dir() || dst.exists() {
+            continue;
+        }
+        #[cfg(unix)]
+        let _ = std::os::unix::fs::symlink(&src, &dst);
+    }
 }
 
 fn carry_files(from: &Path, to: &Path) {
@@ -218,9 +258,19 @@ fn uncommitted(worktree: &Path) -> Result<Vec<String>, Error> {
     Ok(status
         .lines()
         .filter_map(|line| line.get(3..).map(str::trim))
-        .filter(|path| !CARRY.contains(path) && !path.starts_with("node_modules"))
+        .filter(|path| !is_carried_in(path))
         .map(str::to_string)
         .collect())
+}
+
+/// Did Identra put this here, rather than the agent. These are the things isolate links or copies in
+/// to make the checkout usable: they are not the agent's work and must not make the tree look dirty,
+/// or a merge could never happen. A gitignored `.claude` linked in shows up because the ignore rule
+/// is written for a directory and this is a symlink, which the trailing slash does not match, so it
+/// has to be named here rather than left to gitignore.
+fn is_carried_in(path: &str) -> bool {
+    let head = path.split('/').next().unwrap_or(path);
+    CARRY.contains(&path) || head == "node_modules" || AGENT_CONFIG.contains(&head)
 }
 
 /// Land an isolated agent's branch back on the checkout it came from.
@@ -295,7 +345,12 @@ mod tests {
         std::fs::write(dir.join("README.md"), "hello\n").unwrap();
         std::fs::write(dir.join(".env"), "SECRET=1\n").unwrap();
         std::fs::create_dir_all(dir.join("node_modules/left-pad")).unwrap();
-        run(&["add", "README.md"]);
+        // A project skill the same way real ones show up: present in the checkout, gitignored, so a
+        // worktree would not carry it on its own.
+        std::fs::create_dir_all(dir.join(".claude/skills/review")).unwrap();
+        std::fs::write(dir.join(".claude/skills/review/SKILL.md"), "review\n").unwrap();
+        std::fs::write(dir.join(".gitignore"), ".claude/\n").unwrap();
+        run(&["add", "README.md", ".gitignore"]);
         run(&["commit", "-qm", "first"]);
         dir
     }
@@ -313,11 +368,16 @@ mod tests {
             "it is a real checkout"
         );
 
-        // The two things git does not bring, and without which the agent's first command fails.
+        // The things git does not bring, and without which the agent's first command fails or the
+        // agent is quietly worse at this repo than the one beside it.
         assert!(out.path.join(".env").is_file(), "secrets are carried in");
         assert!(
             out.path.join("node_modules").exists(),
             "node_modules is linked, not missing"
+        );
+        assert!(
+            out.path.join(".claude/skills/review/SKILL.md").is_file(),
+            "the project's agent skills reach the isolated checkout"
         );
 
         // Its own branch: work here does not touch what the other agent sees.

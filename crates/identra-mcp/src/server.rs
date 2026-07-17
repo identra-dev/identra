@@ -677,6 +677,15 @@ async fn call_tool(bus: &Bus, caller: &str, params: Option<&Value>) -> Value {
                 };
                 match worktree::isolate(&dir, &slug, &base) {
                     Ok(out) => {
+                        // A worktree is a checkout of tracked files, and the guide is not one: it is
+                        // written into the workspace, so a fresh checkout never has it. Without it
+                        // the helper has every bus tool and no idea it has peers, which is the whole
+                        // difference between two agents working together and two agents ignoring
+                        // each other. Best effort, because a helper with no guide is still better
+                        // than no helper.
+                        if let Err(e) = config::write_guides(&out.path) {
+                            eprintln!("identra: no guide in the isolated checkout: {e}");
+                        }
                         cwd = Some(out.path.display().to_string());
                         branch = Some(out.branch);
                     }
