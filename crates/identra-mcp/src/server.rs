@@ -2,10 +2,15 @@
 //!
 //! Codex 0.144 speaks the MCP streamable-HTTP transport: it POSTs JSON-RPC to one endpoint and,
 //! for a server that never pushes its own notifications, accepts a plain `application/json`
-//! response per request. The three bus tools are pure request/response, so that is all I
-//! implement here: `initialize`, `tools/list`, `tools/call`, and a 202 for the one notification
-//! codex sends. No SSE, no session state. That is far less surface than wiring a full MCP SDK for
-//! three tools, and every byte on the wire is under test.
+//! response per request. Every bus tool is pure request/response, so that is all I implement here:
+//! `initialize`, `tools/list`, `tools/call`, and a 202 for the one notification codex sends. No
+//! SSE, no session state. That is far less surface than wiring a full MCP SDK for a handful of
+//! tools, and every byte on the wire is under test.
+//!
+//! Two kinds of tool live here, and they are gated differently on purpose. The peer tools are about
+//! another agent's live terminal, so an edge on the canvas has to authorize them. The memory tools
+//! are about the project itself, so they are open to every node in the workspace: an agent wired to
+//! nobody still inherits what was learned, which is the only reason memory is worth having.
 //!
 //! Identity is one header and it is a secret, not a name. Identra mints a token per node, sets it
 //! as `IDENTRA_BUS_TOKEN` on that node's process, and the CLI expands it into a header itself. The
@@ -38,8 +43,38 @@ use serde_json::{json, Value};
 
 use identra_core::canvas;
 use identra_core::TerminalManager;
+use identra_memory as memory;
 
 use crate::{config, get_peer_context, list_peers, send_to_node, BusError};
+
+/// Memories live beside the canvas, inside the workspace, because they are about that project. A
+/// workspace you delete takes its memory with it, which is the behaviour I want: no orphaned facts
+/// about a project that is gone.
+pub fn memory_path(project_dir: &std::path::Path) -> PathBuf {
+    project_dir.join(".identra").join("memory.db")
+}
+
+/// Every agent in a workspace writes into one shared pool, so the dedup key is the project and not
+/// the agent. Two agents learning the same thing is one memory, and a fresh agent reads what every
+/// earlier one learned. That sharing is the whole point of having memory at all.
+const MEMORY_AGENT: &str = "workspace";
+
+/// How many memories a recall returns unless the caller asks for fewer. Enough to be useful in a
+/// prompt, small enough not to bury the agent's actual task.
+const RECALL_LIMIT: usize = 10;
+
+/// Open the workspace's memory, creating `.identra/` on the first write.
+///
+/// I open per call rather than holding a connection on the bus: `Connection` is not `Sync`, these
+/// are low frequency calls, and opening SQLite is cheap. A cached connection behind a mutex would
+/// be a lock to reason about for no gain I can measure.
+fn open_memory(project_dir: &std::path::Path) -> Result<memory::Store, String> {
+    let path = memory_path(project_dir);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    memory::Store::open(path).map_err(|e| e.to_string())
+}
 
 /// Shared bus state. Holds the same `TerminalManager` the Tauri commands hold, so a peer's live
 /// transcript and stdin are the exact ones on the canvas, and reads the canvas fresh per call so a
@@ -196,6 +231,27 @@ fn tool_specs() -> Value {
                 "properties": {"nodeId": {"type": "string"}, "text": {"type": "string"}},
                 "required": ["nodeId", "text"]
             }
+        },
+        {
+            "name": "add_memory",
+            "description": "Remember a durable fact about this project so any agent here, now or later, can recall it. Good memories are decisions, constraints, conventions, and approaches that were tried and rejected. Write one self-contained fact per call, with no pronouns, so it still makes sense to an agent that was not here. Do not store secrets.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"text": {"type": "string"}},
+                "required": ["text"]
+            }
+        },
+        {
+            "name": "search_memory",
+            "description": "Recall what has already been learned about this project, by you or by any other agent in earlier sessions. Search before asking the user something they may have already answered, and before redoing work someone already rejected.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer"}
+                },
+                "required": ["query"]
+            }
         }
     ])
 }
@@ -261,8 +317,83 @@ fn call_tool(bus: &Bus, caller: &str, params: Option<&Value>) -> Value {
                 Err(e) => err_text(&bus_err(e)),
             }
         }
+        // Memory is not edge gated. An edge says who may read your terminal, which is a live,
+        // private thing; memory is what the project knows, and every node in the workspace shares
+        // it. Gating recall behind a wire would defeat the point: the whole value is that an agent
+        // dropped in later, wired to nobody, still starts from what was learned.
+        "add_memory" => match remember(&dir, caller, &arg_str("text")) {
+            Ok(stored) => ok_text(&stored),
+            Err(e) => err_text(&e),
+        },
+        "search_memory" => {
+            let limit = args
+                .get("limit")
+                .and_then(Value::as_u64)
+                .map(|n| n as usize)
+                .filter(|n| *n > 0)
+                .unwrap_or(RECALL_LIMIT);
+            match recall(&dir, &arg_str("query"), limit) {
+                Ok(found) => ok_text(&found),
+                Err(e) => err_text(&e),
+            }
+        }
         other => err_text(&format!("unknown tool: {other}")),
     }
+}
+
+/// The workspace folder name is the project's identity for memory. I use it rather than the full
+/// path so a workspace that gets moved keeps what it learned.
+fn memory_scope(project_dir: &std::path::Path, caller: &str) -> memory::Scope {
+    memory::Scope {
+        user_id: project_dir
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "workspace".into()),
+        agent_id: MEMORY_AGENT.into(),
+        // The run is the node that learned it. It buys provenance in the history log without
+        // splitting the shared pool, since the dedup key does not include it.
+        run_id: caller.into(),
+    }
+}
+
+fn remember(project_dir: &std::path::Path, caller: &str, text: &str) -> Result<String, String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err("nothing to remember: text was empty".into());
+    }
+    let store = open_memory(project_dir)?;
+    let stored = store
+        .add(&memory_scope(project_dir, caller), text)
+        .map_err(|e| e.to_string())?;
+    // An empty result means the fact was already held. That is a success, not a failure, but the
+    // agent should hear it so it does not keep trying to store the same thing.
+    Ok(if stored.is_empty() {
+        "already remembered, nothing new stored".into()
+    } else {
+        format!("remembered: {text}")
+    })
+}
+
+fn recall(project_dir: &std::path::Path, query: &str, limit: usize) -> Result<String, String> {
+    let store = open_memory(project_dir)?;
+    let scope = memory_scope(project_dir, "");
+    // Filter on the project only. Any agent's memories, from any session, are in scope: recall that
+    // stopped at your own sessions would just be a worse transcript.
+    let filter = memory::Filter {
+        user_id: Some(scope.user_id),
+        ..Default::default()
+    };
+    let hits = store
+        .search(&filter, query, limit)
+        .map_err(|e| e.to_string())?;
+    if hits.is_empty() {
+        return Ok("nothing remembered about that yet".into());
+    }
+    Ok(hits
+        .iter()
+        .map(|m| format!("- {}", m.content))
+        .collect::<Vec<_>>()
+        .join("\n"))
 }
 
 fn ok_text(text: &str) -> Value {
@@ -338,7 +469,7 @@ mod tests {
     }
 
     #[test]
-    fn initialize_echoes_version_and_lists_three_tools() {
+    fn initialize_echoes_version_and_lists_the_tools() {
         let bus = bus_in(std::env::temp_dir());
         let init = dispatch(
             &bus,
@@ -357,9 +488,80 @@ mod tests {
             .iter()
             .map(|t| t["name"].as_str().unwrap())
             .collect();
-        assert_eq!(names, ["list_peers", "get_peer_context", "send_to_node"]);
+        assert_eq!(
+            names,
+            [
+                "list_peers",
+                "get_peer_context",
+                "send_to_node",
+                "add_memory",
+                "search_memory"
+            ]
+        );
 
         assert!(dispatch(&bus, "node-a", "nonsense", None).is_err());
+    }
+
+    #[test]
+    fn memory_carries_across_agents_and_sessions() {
+        let dir = std::env::temp_dir().join(format!("identra-mem-tool-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let bus = bus_in(dir.clone());
+
+        let add = |caller: &str, text: &str| {
+            call_tool(
+                &bus,
+                caller,
+                Some(&json!({"name": "add_memory", "arguments": {"text": text}})),
+            )
+        };
+        let find = |caller: &str, query: &str| {
+            call_tool(
+                &bus,
+                caller,
+                Some(&json!({"name": "search_memory", "arguments": {"query": query}})),
+            )
+        };
+
+        let out = add(
+            "node-a",
+            "we dropped redis and use postgres listen/notify instead",
+        );
+        assert_eq!(out["isError"], false);
+
+        // The payoff: a different node, in a later session, wired to nobody, still knows. This is
+        // the whole reason memory is not edge gated.
+        let hit = find("node-b", "redis");
+        assert_eq!(hit["isError"], false);
+        assert!(
+            hit["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("postgres listen/notify"),
+            "a later agent should recall what an earlier one learned: {hit}"
+        );
+
+        // Re learning a known fact is a no op, so a chatty agent cannot fill the pool with copies.
+        let again = add(
+            "node-b",
+            "we dropped redis and use postgres listen/notify instead",
+        );
+        assert!(again["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("already remembered"));
+
+        // A miss says so plainly rather than returning an empty list the agent has to interpret.
+        let miss = find("node-a", "kubernetes");
+        assert!(miss["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("nothing remembered"));
+
+        // Empty text is a caller mistake, and silently storing it would poison recall.
+        assert_eq!(add("node-a", "   ")["isError"], true);
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

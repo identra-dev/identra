@@ -8,6 +8,7 @@ description = "Identra's edge-gated context bus: peers, context, and messages be
 [dependencies]
 axum = { version = "0.8.9", default-features = false, features = ["json", "tokio", "http1"] }
 identra-core = { path = "../identra-core" }
+identra-memory = { version = "0.1.0", path = "../identra-memory" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 tokio = { version = "1.52.4", features = ["net", "rt"] }

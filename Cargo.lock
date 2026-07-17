@@ -1545,6 +1545,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "identra-core",
+ "identra-memory",
  "serde",
  "serde_json",
  "tokio",
