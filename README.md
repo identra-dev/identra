@@ -77,7 +77,7 @@ Run `just doctor` and it will tell you what you are missing.
 ## Quick start
 
 ```bash
-git clone https://github.com/IdentraHQ/identra.git
+git clone https://github.com/identra-dev/identra.git
 cd identra
 just doctor      # check your machine is ready
 just dev         # build and launch with hot reload
