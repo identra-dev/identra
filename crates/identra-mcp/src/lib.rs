@@ -4,13 +4,17 @@
 //! joins them: no edge means no peer listing, no context read, no message. Every tool here
 //! re-checks the current edges per call, so a wire pulled after launch stops the flow.
 //!
-//! The three tools are plain functions over two seams — the edge set (`&[Edge]`, read from
+//! The peer tools are plain functions over two seams: the edge set (`&[Edge]`, read from
 //! `.identra/canvas.json` by the caller) and [`NodeIo`] (the PTY side). That keeps them
 //! testable against a fake, no live terminal or HTTP transport needed. `TerminalManager`
 //! satisfies `NodeIo`, so wiring the real bus is one blanket impl, not a rewrite.
+//!
+//! [`tasks`] is the other half of working together: talking coordinates, a board commits. It is
+//! separate because a claim has to be atomic, which is a database's job, not a message's.
 
 pub mod config;
 pub mod server;
+pub mod tasks;
 
 use identra_core::canvas::Edge;
 use identra_core::TerminalManager;

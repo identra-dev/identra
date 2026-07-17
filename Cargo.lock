@@ -1546,6 +1546,7 @@ dependencies = [
  "axum",
  "identra-core",
  "identra-memory",
+ "rusqlite",
  "serde",
  "serde_json",
  "tokio",

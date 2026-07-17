@@ -45,7 +45,7 @@ use identra_core::canvas;
 use identra_core::TerminalManager;
 use identra_memory as memory;
 
-use crate::{config, get_peer_context, list_peers, send_to_node, BusError};
+use crate::{config, get_peer_context, list_peers, send_to_node, tasks, BusError};
 
 /// Memories live beside the canvas, inside the workspace, because they are about that project. A
 /// workspace you delete takes its memory with it, which is the behaviour I want: no orphaned facts
@@ -252,6 +252,40 @@ fn tool_specs() -> Value {
                 },
                 "required": ["query"]
             }
+        },
+        {
+            "name": "add_task",
+            "description": "Put a piece of work on the shared board so any agent here can take it. Use `after` to name tasks that must finish first, so nobody starts something that is not ready. Describe one piece of work per task, and name the files it owns.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "description": {"type": "string"},
+                    "after": {"type": "array", "items": {"type": "integer"}}
+                },
+                "required": ["description"]
+            }
+        },
+        {
+            "name": "list_tasks",
+            "description": "See the shared board: what is open, who is on what, what is blocked, and what is finished.",
+            "inputSchema": {"type": "object", "properties": {}, "additionalProperties": false}
+        },
+        {
+            "name": "claim_task",
+            "description": "Take a task before you start it, so no other agent does the same work. Omit the id to take the oldest task that is ready. Claiming is atomic: if you get it, it is yours.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"id": {"type": "integer"}}
+            }
+        },
+        {
+            "name": "complete_task",
+            "description": "Mark your task finished, with a short note on what you did. This is what unblocks the tasks waiting on it, so do it as soon as the work is done rather than at the end.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"id": {"type": "integer"}, "note": {"type": "string"}},
+                "required": ["id"]
+            }
         }
     ])
 }
@@ -337,8 +371,71 @@ fn call_tool(bus: &Bus, caller: &str, params: Option<&Value>) -> Value {
                 Err(e) => err_text(&e),
             }
         }
+        // The board, like memory, is workspace wide rather than edge gated. An edge is about
+        // reading a peer's private terminal; work everyone can pick up is the opposite of private.
+        "add_task" => {
+            let after: Vec<i64> = args
+                .get("after")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(Value::as_i64).collect())
+                .unwrap_or_default();
+            match board(&dir).and_then(|b| b.add(&arg_str("description"), &after, now())) {
+                Ok(id) => ok_text(&format!("added t{id}")),
+                Err(e) => err_text(&e),
+            }
+        }
+        "list_tasks" => match board(&dir).and_then(|b| b.list()) {
+            Ok(list) if list.is_empty() => ok_text("the board is empty"),
+            Ok(list) => ok_text(
+                &list
+                    .iter()
+                    .map(tasks::render)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
+            Err(e) => err_text(&e),
+        },
+        "claim_task" => {
+            // A claim held by a node that is gone is not a lock, so the live set decides what can
+            // be taken back. The manager is the only thing that knows which nodes still run.
+            let live = bus.manager.ids();
+            let wanted = args.get("id").and_then(Value::as_i64);
+            match board(&dir).and_then(|b| b.claim(caller, wanted, &live)) {
+                Ok(t) => ok_text(&format!("claimed t{}: {}", t.id, t.description)),
+                Err(e) => err_text(&e),
+            }
+        }
+        "complete_task" => {
+            let Some(id) = args.get("id").and_then(Value::as_i64) else {
+                return err_text("complete_task needs the id of the task you finished");
+            };
+            let note = args.get("note").and_then(Value::as_str);
+            match board(&dir).and_then(|b| b.complete(id, note, now())) {
+                Ok(unblocked) if unblocked.is_empty() => ok_text(&format!("done t{id}")),
+                Ok(unblocked) => ok_text(&format!(
+                    "done t{id}. now unblocked: {}",
+                    unblocked
+                        .iter()
+                        .map(|t| format!("t{} ({})", t.id, t.description))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )),
+                Err(e) => err_text(&e),
+            }
+        }
         other => err_text(&format!("unknown tool: {other}")),
     }
+}
+
+fn board(project_dir: &std::path::Path) -> Result<tasks::Board, String> {
+    tasks::Board::open(project_dir)
+}
+
+fn now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// The workspace folder name is the project's identity for memory. I use it rather than the full
@@ -495,7 +592,11 @@ mod tests {
                 "get_peer_context",
                 "send_to_node",
                 "add_memory",
-                "search_memory"
+                "search_memory",
+                "add_task",
+                "list_tasks",
+                "claim_task",
+                "complete_task"
             ]
         );
 
@@ -560,6 +661,72 @@ mod tests {
 
         // Empty text is a caller mistake, and silently storing it would poison recall.
         assert_eq!(add("node-a", "   ")["isError"], true);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn two_agents_split_a_board_without_doing_the_same_work() {
+        let dir = std::env::temp_dir().join(format!("identra-board-tool-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let bus = bus_in(dir.clone());
+
+        let call = |caller: &str, args: Value| call_tool(&bus, caller, Some(&args));
+        let text = |v: &Value| v["content"][0]["text"].as_str().unwrap().to_string();
+
+        // One agent plans the work: the test cannot start until the route exists.
+        let r = call(
+            "a",
+            json!({"name": "add_task", "arguments": {"description": "write GET /health in src/health.rs"}}),
+        );
+        assert_eq!(text(&r), "added t1");
+        let r = call(
+            "a",
+            json!({"name": "add_task", "arguments": {"description": "test it in tests/health.rs", "after": [1]}}),
+        );
+        assert_eq!(text(&r), "added t2");
+
+        // The other agent sees the same board. That is the point of it being shared.
+        let board = text(&call("b", json!({"name": "list_tasks"})));
+        assert!(board.contains("- t1 [open, claimable] write GET /health"));
+        assert!(board.contains("- t2 [blocked by t1]"));
+
+        // a takes the route. b reaching for the test is refused with the reason, so it waits instead
+        // of building against a route that does not exist yet.
+        //
+        // Whether b could take t1 off a depends on the live node set, and no PTY runs in this test,
+        // so every claim here looks abandoned. The tasks tests cover that rule with an explicit live
+        // set; I assert only what the live set cannot change.
+        assert!(text(&call(
+            "a",
+            json!({"name": "claim_task", "arguments": {"id": 1}})
+        ))
+        .contains("claimed t1"));
+        let b_tried = call("b", json!({"name": "claim_task", "arguments": {"id": 2}}));
+        assert_eq!(b_tried["isError"], true);
+        assert!(
+            text(&b_tried).contains("blocked until t1"),
+            "got: {}",
+            text(&b_tried)
+        );
+
+        // Finishing the route tells a that b now has something to do.
+        let done = text(&call(
+            "a",
+            json!({"name": "complete_task", "arguments": {"id": 1, "note": "returns 200 ok"}}),
+        ));
+        assert!(done.contains("done t1"));
+        assert!(done.contains("now unblocked: t2"), "got: {done}");
+
+        // And b can now take it.
+        assert!(text(&call(
+            "b",
+            json!({"name": "claim_task", "arguments": {"id": 2}})
+        ))
+        .contains("claimed t2"));
+        assert!(
+            text(&call("b", json!({"name": "list_tasks"}))).contains("- t1 [done: returns 200 ok]")
+        );
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
