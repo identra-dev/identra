@@ -7,12 +7,14 @@
 //! codex sends. No SSE, no session state. That is far less surface than wiring a full MCP SDK for
 //! three tools, and every byte on the wire is under test.
 //!
-//! Identity is the bearer, never a tool argument. Identra mints a token per node right before that
-//! node's CLI launches and passes it in the process env; the bus maps the token back to the node
-//! id, so a caller cannot claim to be a peer it is not. The edge on the canvas is the second gate:
-//! even a valid caller only reads or messages nodes it is wired to.
+//! Identity is two headers, never a tool argument, and neither is written by the agent: Identra
+//! sets `IDENTRA_BUS_TOKEN` and `IDENTRA_BUS_NODE` on each node's process and the CLI expands them
+//! into headers itself. The token is one secret per launch, so only agents Identra started can talk
+//! to the bus at all; the node header says which node is calling. Headers are what every one of
+//! these CLIs can source from the environment, which is the only way one config serves every node.
+//! The edge on the canvas is the second gate: even a valid caller only reads or messages nodes it
+//! is wired to.
 
-use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -30,39 +32,35 @@ use serde_json::{json, Value};
 use identra_core::canvas;
 use identra_core::TerminalManager;
 
-use crate::{get_peer_context, list_peers, send_to_node, BusError};
+use crate::{config, get_peer_context, list_peers, send_to_node, BusError};
 
 /// Shared bus state. Holds the same `TerminalManager` the Tauri commands hold, so a peer's live
 /// transcript and stdin are the exact ones on the canvas, and reads the canvas fresh per call so a
 /// wire pulled mid-session takes effect immediately.
+///
+/// `project_dir` is shared with the Tauri layer rather than copied, because switching workspace has
+/// to move the bus too: the tools must read the canvas the user is actually looking at.
 pub struct Bus {
     manager: Arc<TerminalManager>,
-    project_dir: PathBuf,
-    tokens: Mutex<HashMap<String, String>>,
+    project_dir: Arc<Mutex<PathBuf>>,
+    token: String,
 }
 
 impl Bus {
-    pub fn new(manager: Arc<TerminalManager>, project_dir: PathBuf) -> Self {
+    pub fn new(manager: Arc<TerminalManager>, project_dir: Arc<Mutex<PathBuf>>) -> Self {
         Self {
             manager,
             project_dir,
-            tokens: Mutex::new(HashMap::new()),
+            // One secret per launch, shared by every node. It is not what tells nodes apart (the
+            // node header does that); it is what stops a process that merely found the port from
+            // talking to the bus at all.
+            token: random_token(),
         }
     }
 
-    /// Mint a fresh bearer for a node and remember which node it names. Call this right before the
-    /// node's CLI launches and set the result as `IDENTRA_BUS_TOKEN` in that process's env.
-    pub fn issue_token(&self, node_id: &str) -> String {
-        let token = random_token();
-        self.tokens
-            .lock()
-            .unwrap()
-            .insert(token.clone(), node_id.to_string());
-        token
-    }
-
-    fn node_for(&self, token: &str) -> Option<String> {
-        self.tokens.lock().unwrap().get(token).cloned()
+    /// The per-launch secret. Goes into each agent process's env, never onto disk.
+    pub fn token(&self) -> &str {
+        &self.token
     }
 }
 
@@ -109,10 +107,14 @@ async fn handle(
     if !peer.ip().is_loopback() {
         return StatusCode::FORBIDDEN.into_response();
     }
-    let Some(token) = bearer(&headers) else {
+    // Two headers, both sourced from the node's env by the CLI itself: the launch secret proves
+    // this is an agent Identra started, and the node id says which one. I compare the secret in
+    // constant time so a wrong guess leaks nothing through timing.
+    let presented = header(&headers, config::TOKEN_HEADER).unwrap_or_default();
+    if !constant_time_eq(presented.as_bytes(), bus.token.as_bytes()) {
         return StatusCode::UNAUTHORIZED.into_response();
-    };
-    let Some(caller) = bus.node_for(&token) else {
+    }
+    let Some(caller) = header(&headers, config::NODE_HEADER).filter(|n| !n.is_empty()) else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
 
@@ -201,7 +203,8 @@ fn call_tool(bus: &Bus, caller: &str, params: Option<&Value>) -> Value {
     };
 
     // Fresh every call: the canvas is the current topology, and a peer's title travels with it.
-    let canvas = canvas::load(&bus.project_dir);
+    let dir = bus.project_dir.lock().unwrap().clone();
+    let canvas = canvas::load(&dir);
     let edges = &canvas.edges;
 
     match name {
@@ -264,13 +267,21 @@ fn bus_err(e: BusError) -> String {
     }
 }
 
-fn bearer(headers: &HeaderMap) -> Option<String> {
-    headers
-        .get("authorization")?
-        .to_str()
-        .ok()?
-        .strip_prefix("Bearer ")
-        .map(str::to_string)
+fn header(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers.get(name)?.to_str().ok().map(str::to_string)
+}
+
+/// Compare without an early exit, so how far a wrong token matched is not observable in the timing.
+/// Sixteen bytes of hex is small enough that a hand-rolled loop beats pulling in a crate for it.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 /// 16 bytes of `/dev/urandom`, hex encoded. That source is always present on the Linux and macOS
@@ -299,20 +310,34 @@ mod tests {
 
     fn bus_in(dir: PathBuf) -> Bus {
         let manager = Arc::new(TerminalManager::new(Arc::new(|_id, _out| {})));
-        Bus::new(manager, dir)
+        Bus::new(manager, Arc::new(Mutex::new(dir)))
     }
 
     #[test]
-    fn token_names_the_node_and_bearer_parses() {
-        let bus = bus_in(std::env::temp_dir());
-        let token = bus.issue_token("node-a");
-        assert_eq!(bus.node_for(&token).as_deref(), Some("node-a"));
-        assert_eq!(bus.node_for("not-a-token"), None);
+    fn each_launch_mints_its_own_secret_and_compares_it_safely() {
+        let a = bus_in(std::env::temp_dir());
+        let b = bus_in(std::env::temp_dir());
+        assert_ne!(
+            a.token(),
+            b.token(),
+            "a secret is per launch, not a constant"
+        );
+        assert_eq!(a.token().len(), 32, "16 random bytes, hex encoded");
+
+        assert!(constant_time_eq(a.token().as_bytes(), a.token().as_bytes()));
+        assert!(!constant_time_eq(
+            a.token().as_bytes(),
+            b.token().as_bytes()
+        ));
+        assert!(!constant_time_eq(b"short", b"longer"));
 
         let mut headers = HeaderMap::new();
-        headers.insert("authorization", format!("Bearer {token}").parse().unwrap());
-        assert_eq!(bearer(&headers).as_deref(), Some(token.as_str()));
-        assert_eq!(bearer(&HeaderMap::new()), None);
+        headers.insert(config::NODE_HEADER, "node-a".parse().unwrap());
+        assert_eq!(
+            header(&headers, config::NODE_HEADER).as_deref(),
+            Some("node-a")
+        );
+        assert_eq!(header(&HeaderMap::new(), config::NODE_HEADER), None);
     }
 
     #[test]
@@ -362,6 +387,7 @@ mod tests {
                 target: "b".into(),
             }],
             viewport: Default::default(),
+            title: "test".into(),
         };
         canvas::save(&dir, &canvas).unwrap();
 

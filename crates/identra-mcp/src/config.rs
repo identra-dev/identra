@@ -1,122 +1,139 @@
-//! Writing and removing Identra's block in the user's `~/.codex/config.toml`.
+//! Getting each agent CLI onto the bus, without touching anything the user owns globally.
 //!
-//! Codex reads its MCP server list once at startup, so the bus has to be in the config before an
-//! agent launches. I write a single marked block and nothing else, so I can strip exactly that
-//! block on exit and leave every other line the user has (including edits made while Identra ran)
-//! untouched. I also keep a one-time backup of the original file as a crash safety net, in case
-//! the app dies before it restores.
+//! Every CLI reads its MCP server list once, at startup, so this has to be in place before a node
+//! launches. Three facts make it clean:
+//!
+//! - Each CLI can source a header value from an environment variable (claude expands `${VAR}` in
+//!   `.mcp.json`, codex has `env_http_headers`). So one config serves every node, and the per-node
+//!   identity rides in the env Identra sets on that node's process.
+//! - claude takes `--mcp-config <file>`, so I write one `.mcp.json` inside the workspace and point
+//!   claude at it. No global config, no project-trust prompt.
+//! - codex takes `-c key=value` overrides, so its bus config is launch arguments. Nothing is
+//!   written to `~/.codex/config.toml` at all, which means there is nothing to back up or restore
+//!   and no way to leave the user's own codex broken.
+//!
+//! The workspace is the natural home for the `.mcp.json` because the workspace folder is already
+//! the directory the agents run in.
 
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-const START: &str = "# >>> identra bus";
-const END: &str = "# <<< identra bus";
+/// The MCP server name the agents see. Also the key in `.mcp.json` and the codex `-c` overrides.
+pub const BUS_NAME: &str = "identra-bus";
 
-/// Where codex reads its config: `$CODEX_HOME/config.toml`, with `$CODEX_HOME` defaulting to
-/// `~/.codex`. Returns `None` only if neither variable is set, which should not happen in a normal
-/// desktop session.
-pub fn codex_config_path() -> Option<PathBuf> {
-    if let Some(codex_home) = std::env::var_os("CODEX_HOME") {
-        return Some(Path::new(&codex_home).join("config.toml"));
+/// Header carrying the per-launch secret. Every node sends the same value: it proves the caller is
+/// an agent Identra spawned, not some other process that found the port.
+pub const TOKEN_HEADER: &str = "X-Identra-Token";
+/// Header carrying the calling node's id. This is who the bus thinks you are.
+pub const NODE_HEADER: &str = "X-Identra-Node";
+
+pub const PORT_ENV: &str = "IDENTRA_BUS_PORT";
+pub const TOKEN_ENV: &str = "IDENTRA_BUS_TOKEN";
+pub const NODE_ENV: &str = "IDENTRA_BUS_NODE";
+
+fn mcp_json_path(workspace: &Path) -> std::path::PathBuf {
+    workspace.join(".mcp.json")
+}
+
+/// Write the workspace's `.mcp.json`. claude is pointed at this file with `--mcp-config`.
+///
+/// The port is baked in because I know it when I write this, but the token and node id are left as
+/// `${VAR}` for claude to expand from the process env: they are the two things that differ per node
+/// and per launch, and the token must never sit on disk.
+pub fn write_mcp_json(workspace: &Path, port: u16) -> io::Result<()> {
+    let body = format!(
+        r#"{{
+  "mcpServers": {{
+    "{BUS_NAME}": {{
+      "type": "http",
+      "url": "http://127.0.0.1:{port}/mcp",
+      "headers": {{
+        "{TOKEN_HEADER}": "${{{TOKEN_ENV}}}",
+        "{NODE_HEADER}": "${{{NODE_ENV}}}"
+      }}
+    }}
+  }}
+}}
+"#
+    );
+    std::fs::create_dir_all(workspace)?;
+    std::fs::write(mcp_json_path(workspace), body)
+}
+
+/// Extra launch arguments that put this agent on the bus, or an empty list for an agent Identra
+/// does not know how to wire. Codex carries its whole bus config here, which is why it needs no
+/// config file. Claude just needs pointing at the workspace `.mcp.json`.
+pub fn launch_args(kind: &str, port: u16, workspace: &Path) -> Vec<String> {
+    match kind {
+        "codex" => vec![
+            "-c".into(),
+            format!(r#"mcp_servers.{BUS_NAME}.url="http://127.0.0.1:{port}/mcp""#),
+            "-c".into(),
+            format!(
+                r#"mcp_servers.{BUS_NAME}.env_http_headers={{"{TOKEN_HEADER}"="{TOKEN_ENV}","{NODE_HEADER}"="{NODE_ENV}"}}"#
+            ),
+        ],
+        "claude" => vec![
+            "--mcp-config".into(),
+            mcp_json_path(workspace).display().to_string(),
+        ],
+        _ => Vec::new(),
     }
-    let home = std::env::var_os("HOME")?;
-    Some(Path::new(&home).join(".codex").join("config.toml"))
 }
 
-fn backup_path(config: &Path) -> PathBuf {
-    let mut s = config.as_os_str().to_os_string();
-    s.push(".identra-backup");
-    PathBuf::from(s)
+/// The env every agent node is launched with. `node_id` is what the bus reads back as the caller,
+/// so each node gets its own and cannot claim to be a peer.
+pub fn launch_env(port: u16, token: &str, node_id: &str) -> Vec<(String, String)> {
+    vec![
+        (PORT_ENV.into(), port.to_string()),
+        (TOKEN_ENV.into(), token.into()),
+        (NODE_ENV.into(), node_id.into()),
+    ]
 }
 
-/// The block codex reads. The token is not written here: `bearer_token_env_var` names an env var
-/// that Identra sets on each agent process, so every node authenticates with its own bearer and
-/// the secret never sits in a file on disk.
-fn block(port: u16) -> String {
-    format!(
-        "{START}\n\
-         [mcp_servers.identra_bus]\n\
-         url = \"http://127.0.0.1:{port}/mcp\"\n\
-         bearer_token_env_var = \"IDENTRA_BUS_TOKEN\"\n\
-         startup_timeout_sec = 10\n\
-         {END}\n"
-    )
-}
+/// The guide Identra drops in a workspace so the agents know they are not alone. Codex reads
+/// `AGENTS.md` and claude reads `CLAUDE.md`, so I write the same text to both. Without this an
+/// agent has the bus tools and no reason to use them, which is the difference between two agents
+/// collaborating and two agents ignoring each other.
+const GUIDE: &str = r#"# Working with the other agents in this workspace
 
-/// Everything except a previously written Identra block, so a rewrite never stacks two blocks and
-/// a restore removes only what Identra added.
-fn strip_block(content: &str) -> String {
-    let mut out = String::new();
-    let mut skipping = false;
-    for line in content.lines() {
-        let t = line.trim_start();
-        if t.starts_with(START) {
-            skipping = true;
-            continue;
+You are running as a node on an Identra canvas. Other agents may be running as nodes beside you,
+and a wire drawn between two nodes is what lets them talk. If you are wired to someone, you have
+the `identra-bus` tools:
+
+- `list_peers()` gives you the node ids you are wired to, with their names.
+- `get_peer_context(nodeId)` returns what that peer has recently done, so you can pick up where
+  they left off instead of asking the human to repeat it.
+- `send_to_node(nodeId, text)` puts a line into that peer's terminal. They will see it prefixed
+  with your name.
+
+## How to split work
+
+When a task has parts that do not depend on each other, do not do all of it yourself. Call
+`list_peers()`, agree who takes what, and work in parallel:
+
+1. Say what you are taking, and send the other part to your peer with `send_to_node`. Be specific:
+   name the files you will touch and the files you are leaving to them.
+2. Do your part.
+3. Tell your peer when you are done, and what you changed, with `send_to_node`.
+4. If you need to know what they did, call `get_peer_context` rather than guessing.
+
+## The one rule that keeps this from breaking
+
+Two agents editing the same file will overwrite each other. There is no isolation between you yet,
+so split the work by file: you own the files you named, they own theirs. If you need a change in a
+file your peer owns, message them and ask, do not edit it yourself.
+"#;
+
+/// Drop the collaboration guide into the workspace under both names, without clobbering a guide the
+/// user has written themselves.
+pub fn write_guides(workspace: &Path) -> io::Result<()> {
+    std::fs::create_dir_all(workspace)?;
+    for name in ["AGENTS.md", "CLAUDE.md"] {
+        let path = workspace.join(name);
+        if !path.exists() {
+            std::fs::write(path, GUIDE)?;
         }
-        if skipping {
-            if t.starts_with(END) {
-                skipping = false;
-            }
-            continue;
-        }
-        out.push_str(line);
-        out.push('\n');
-    }
-    out
-}
-
-fn write_atomic(path: &Path, content: &str) -> io::Result<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let tmp = path.with_extension("toml.identra-tmp");
-    std::fs::write(&tmp, content)?;
-    std::fs::rename(&tmp, path)
-}
-
-/// Add or refresh Identra's `[mcp_servers.identra_bus]` block in `config`. Idempotent: any earlier
-/// block is stripped first, so repeated calls (a relaunch on a new port) never duplicate it.
-pub fn write_codex_bus(config: &Path, port: u16) -> io::Result<()> {
-    let existing = std::fs::read_to_string(config).unwrap_or_default();
-    // Back up the true original once, before Identra has touched the file.
-    let backup = backup_path(config);
-    if config.exists() && !backup.exists() {
-        std::fs::copy(config, &backup)?;
-    }
-    let base = strip_block(&existing);
-    let base = base.trim_end();
-    let content = if base.is_empty() {
-        block(port)
-    } else {
-        format!("{base}\n\n{}", block(port))
-    };
-    write_atomic(config, &content)
-}
-
-/// Put the config back the way Identra found it. If a backup exists it is the user's exact
-/// original, so I move it back verbatim, which also drops the backup in one step. If there is no
-/// backup, Identra created the file: I strip its block and, if nothing else remains, remove it.
-pub fn restore_codex(config: &Path) -> io::Result<()> {
-    let backup = backup_path(config);
-    if backup.exists() {
-        std::fs::rename(&backup, config)?;
-        return Ok(());
-    }
-    if !config.exists() {
-        return Ok(());
-    }
-    let content = std::fs::read_to_string(config)?;
-    // Nothing of ours to remove (we never wrote, or the block is already gone): leave the file be
-    // so restore is safe to call unconditionally on exit.
-    if !content.contains(START) {
-        return Ok(());
-    }
-    let stripped = strip_block(&content);
-    if stripped.trim().is_empty() {
-        std::fs::remove_file(config)?;
-    } else {
-        write_atomic(config, &stripped)?;
     }
     Ok(())
 }
@@ -125,67 +142,69 @@ pub fn restore_codex(config: &Path) -> io::Result<()> {
 mod tests {
     use super::*;
 
-    fn temp_config(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "identra-cfg-{}-{}/config.toml",
-            std::process::id(),
-            name
-        ))
+    #[test]
+    fn mcp_json_leaves_identity_to_the_env() {
+        let dir = std::env::temp_dir().join(format!("identra-mcpcfg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        write_mcp_json(&dir, 8900).unwrap();
+        let body = std::fs::read_to_string(dir.join(".mcp.json")).unwrap();
+
+        // The port is known now, so it is baked. The token and node are not, so they stay as env
+        // expansions: that is what lets one file serve every node and keeps the secret off disk.
+        assert!(body.contains("http://127.0.0.1:8900/mcp"));
+        assert!(body.contains(r#""X-Identra-Token": "${IDENTRA_BUS_TOKEN}""#));
+        assert!(body.contains(r#""X-Identra-Node": "${IDENTRA_BUS_NODE}""#));
+        // It has to be valid json or claude will not read it.
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(parsed["mcpServers"]["identra-bus"]["type"], "http");
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
-    fn writes_strips_and_restores_without_touching_user_lines() {
-        let cfg = temp_config("roundtrip");
-        let _ = std::fs::remove_dir_all(cfg.parent().unwrap());
+    fn each_agent_gets_the_wiring_it_understands() {
+        let ws = Path::new("/tmp/ws");
 
-        // A config the user already had, with their own settings.
-        let user = "[projects.\"/home/me/app\"]\ntrust_level = \"trusted\"\n";
-        std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
-        std::fs::write(&cfg, user).unwrap();
+        // codex carries its whole bus config on the command line, so nothing is written for it.
+        let codex = launch_args("codex", 8900, ws);
+        assert_eq!(codex[0], "-c");
+        assert!(codex[1].contains(r#"mcp_servers.identra-bus.url="http://127.0.0.1:8900/mcp""#));
+        assert!(codex[3].contains("env_http_headers"));
+        assert!(codex[3].contains(r#""X-Identra-Node"="IDENTRA_BUS_NODE""#));
 
-        write_codex_bus(&cfg, 8900).unwrap();
-        let after = std::fs::read_to_string(&cfg).unwrap();
-        assert!(
-            after.contains("trust_level = \"trusted\""),
-            "user lines kept"
-        );
-        assert!(after.contains("[mcp_servers.identra_bus]"));
-        assert!(after.contains("http://127.0.0.1:8900/mcp"));
-        assert!(backup_path(&cfg).exists(), "original backed up once");
-
-        // Writing again on a new port refreshes in place, never stacks a second block.
-        write_codex_bus(&cfg, 9100).unwrap();
-        let after2 = std::fs::read_to_string(&cfg).unwrap();
-        assert_eq!(after2.matches("[mcp_servers.identra_bus]").count(), 1);
-        assert!(after2.contains(":9100/mcp"));
-
-        restore_codex(&cfg).unwrap();
-        let restored = std::fs::read_to_string(&cfg).unwrap();
+        // claude just gets pointed at the workspace file.
         assert_eq!(
-            restored, user,
-            "restore returns the file to the user's exact content"
+            launch_args("claude", 8900, ws),
+            vec!["--mcp-config".to_string(), "/tmp/ws/.mcp.json".to_string()]
         );
-        assert!(!backup_path(&cfg).exists(), "backup cleaned up");
 
-        std::fs::remove_dir_all(cfg.parent().unwrap()).unwrap();
+        // An agent I have no wiring for launches clean rather than with junk flags.
+        assert!(launch_args("aider", 8900, ws).is_empty());
+
+        // Each node's env names that node, which is how the bus tells callers apart.
+        let env = launch_env(8900, "secret", "node-a");
+        assert!(env.contains(&("IDENTRA_BUS_NODE".into(), "node-a".into())));
+        assert!(env.contains(&("IDENTRA_BUS_TOKEN".into(), "secret".into())));
     }
 
     #[test]
-    fn created_file_is_removed_on_restore() {
-        let cfg = temp_config("created");
-        let _ = std::fs::remove_dir_all(cfg.parent().unwrap());
+    fn guides_never_clobber_a_users_own_file() {
+        let dir = std::env::temp_dir().join(format!("identra-guide-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("CLAUDE.md"), "my own notes").unwrap();
 
-        // No config existed: Identra creates it.
-        write_codex_bus(&cfg, 8900).unwrap();
-        assert!(cfg.exists());
-        assert!(
-            !backup_path(&cfg).exists(),
-            "nothing to back up when the file was absent"
+        write_guides(&dir).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("CLAUDE.md")).unwrap(),
+            "my own notes",
+            "a guide the user wrote is left alone"
         );
+        assert!(std::fs::read_to_string(dir.join("AGENTS.md"))
+            .unwrap()
+            .contains("list_peers"));
 
-        restore_codex(&cfg).unwrap();
-        assert!(!cfg.exists(), "a file Identra created is removed cleanly");
-
-        let _ = std::fs::remove_dir_all(cfg.parent().unwrap());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
