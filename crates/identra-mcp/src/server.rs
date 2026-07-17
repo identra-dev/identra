@@ -45,6 +45,7 @@ use axum::{
 use serde_json::{json, Value};
 
 use identra_core::canvas;
+use identra_core::worktree;
 use identra_core::TerminalManager;
 use identra_memory as memory;
 
@@ -368,7 +369,11 @@ fn tool_specs() -> Value {
                 "type": "object",
                 "properties": {
                     "agent": {"type": "string", "description": "Agent id, for example codex or claude. Defaults to your own kind."},
-                    "title": {"type": "string"}
+                    "title": {"type": "string"},
+                    "isolate": {
+                        "type": "boolean",
+                        "description": "Give the helper its own checkout on its own branch, so it can edit the same files as you without either of you overwriting the other. Use this whenever the work is not cleanly split by file. Its work lands back on your branch when it is merged."
+                    }
                 }
             }
         },
@@ -571,16 +576,40 @@ async fn call_tool(bus: &Bus, caller: &str, params: Option<&Value>) -> Value {
                 Some(a) if !a.is_empty() => a.to_string(),
                 _ => my_kind,
             };
+            // Isolation happens before the node exists, because the checkout is where it will run.
+            // If it fails, say so and stop: dropping the helper into the shared tree anyway is the
+            // exact collision the caller asked to avoid.
+            let mut cwd = None;
+            let mut branch = None;
+            if args.get("isolate").and_then(Value::as_bool) == Some(true) {
+                let slug = format!("{kind}-{}", &random_token()[..6]);
+                match worktree::isolate(&dir, &slug) {
+                    Ok(out) => {
+                        cwd = Some(out.path.display().to_string());
+                        branch = Some(out.branch);
+                    }
+                    Err(e) => return err_text(&format!("could not isolate the helper: {e}")),
+                }
+            }
+
             let params = json!({
                 "kind": kind,
                 "title": args.get("title").and_then(Value::as_str),
+                "cwd": cwd,
                 // Wiring the helper to its spawner is the whole point: an agent that cannot reach
                 // the one that called it is not help, it is a stranger.
                 "connectTo": caller,
             });
             match bus.canvas_command("add_terminal", params).await {
                 Ok(v) => canvas_reply(&v, |id| {
-                    format!("added {id} and wired it to you. Put work on the board so it has something to claim.")
+                    match &branch {
+                    Some(b) => format!(
+                        "added {id} on its own checkout, branch {b}, and wired it to you. It can edit the same files as you without a collision. Put work on the board so it has something to claim."
+                    ),
+                    None => format!(
+                        "added {id} and wired it to you. It shares your working directory, so split the work by file. Put work on the board so it has something to claim."
+                    ),
+                }
                 }),
                 Err(e) => err_text(&e),
             }

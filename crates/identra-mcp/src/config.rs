@@ -179,11 +179,21 @@ nothing to claim and will just sit there. Add the tasks, then add the agent, the
 Do not spawn help for work you could finish in the time it takes to explain it. Every extra agent
 is another thing your user is paying for and reading.
 
-## The one rule that keeps this from breaking
+## Two agents, one repo
 
-Two agents editing the same file will overwrite each other. There is no isolation between you yet,
-so split the work by file: you own the files your task named, they own theirs. If you need a change
-in a file your peer owns, message them and ask, do not edit it yourself.
+Two agents editing the same file overwrite each other. There are two ways out, and the right one
+depends on the work:
+
+- **Split by file.** You own the files your task named, they own theirs. If you need a change in a
+  file your peer owns, message them and ask, do not edit it yourself. This is the simpler option
+  and it is enough when the split is clean.
+- **Isolate.** `add_terminal(isolate: true)` gives the helper its own checkout on its own branch,
+  so you can both edit the same files and neither of you loses work. Its branch merges back when it
+  is done. Reach for this the moment the work does not divide cleanly by file, rather than trying
+  to negotiate every shared file by message.
+
+If you are working on an isolated branch, commit what you finish. Work you leave uncommitted does
+not merge, and nobody will notice it is missing until it is gone.
 
 ## When to stop
 
