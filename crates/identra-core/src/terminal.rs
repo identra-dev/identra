@@ -1,6 +1,6 @@
 //! The PTY / terminal manager.
 //!
-//! Spawns a CLI (e.g. `codex`) in a real pseudo-terminal — the actual binary, not a wrapper.
+//! Spawns a CLI (e.g. `codex`) in a real pseudo-terminal: the actual binary, not a wrapper.
 //! Output is chunked, each chunk tagged with a monotonic `seq`, and kept in a bounded ring
 //! buffer so a UI node can reattach after a reload without dropping or duplicating a line:
 //! ask for a [`snapshot`](TerminalManager::snapshot), then ignore live chunks whose `seq` is
@@ -16,7 +16,7 @@ use std::thread;
 use portable_pty::{CommandBuilder, MasterPty, NativePtySystem, PtySize, PtySystem};
 use serde::Serialize;
 
-/// One chunk of terminal output. `data` is raw bytes — the caller (xterm.js) owns decoding,
+/// One chunk of terminal output. `data` is raw bytes: the caller (xterm.js) owns decoding,
 /// so a multibyte char split across a read boundary is never corrupted.
 #[derive(Clone, Serialize)]
 pub struct Output {

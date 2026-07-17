@@ -54,11 +54,11 @@ pub enum BusError {
 
 /// Node ids that share an edge with `caller`, caller itself excluded, no duplicates.
 ///
-/// Derived from the canvas edges alone. A wired-but-not-yet-launched peer still lists — that
+/// Derived from the canvas edges alone. A wired-but-not-yet-launched peer still lists, and that
 /// matches the demo flow (wire first, launch after) and any dead peer just yields empty
 /// context downstream.
 // Edges only, by design: intersecting with a live-id set (NodeIo) would narrow this to
-// "running peers" — not wanted while the demo wires nodes before launching them.
+// "running peers", which is not wanted while the demo wires nodes before launching them.
 pub fn list_peers(caller: &str, edges: &[Edge]) -> Vec<String> {
     let mut peers = Vec::new();
     for e in edges {

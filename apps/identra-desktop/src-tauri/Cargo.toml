@@ -3,7 +3,7 @@ name = "identra-desktop"
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
-description = "Identra desktop shell — Tauri v2 window over identra-core."
+description = "Identra desktop shell: a Tauri v2 window over identra-core."
 
 [lib]
 name = "identra_desktop"

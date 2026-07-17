@@ -1,7 +1,7 @@
 //! Which agent CLIs are installed, and whether each one looks signed in. A node offers to run
 //! one of these; if it's missing, the node says so instead of pretending to work.
 //!
-//! Detection is existence and size only. We stat a creds file or check an env var is set — we
+//! Detection is existence and size only. We stat a creds file or check an env var is set, and we
 //! never open or copy a token. That is the whole "reuse what you already have, store nothing"
 //! guarantee: the CLI Identra launches inherits the same env, so what we probe and what it reads
 //! are the same thing.
@@ -77,7 +77,7 @@ const KNOWN: &[Adapter] = &[
         auth_envs: &["OPENAI_API_KEY", "ANTHROPIC_API_KEY"],
     },
     // Not installed on this box; here so the dock shows them as missing and they light up on
-    // any machine that has them. No login concept for aider — it is pure API key.
+    // any machine that has them. No login concept for aider: it is pure API key.
     Adapter {
         id: "aider",
         name: "Aider",
@@ -139,7 +139,7 @@ fn row_to_info(a: &Adapter) -> AgentInfo {
 }
 
 /// True if any auth env is set and non-empty, or any HOME-relative auth path exists and is
-/// non-empty. Stat only — never opens a creds file.
+/// non-empty. Stat only, never opens a creds file.
 fn auth_present(paths: &[&str], envs: &[&str]) -> bool {
     if envs
         .iter()
@@ -158,7 +158,7 @@ fn auth_present(paths: &[&str], envs: &[&str]) -> bool {
     })
 }
 
-/// First entry on PATH that's a file named `bin`. Doesn't check the exec bit —
+/// First entry on PATH that's a file named `bin`. Doesn't check the exec bit,
 /// good enough to tell "installed" from "missing"; tighten if a non-exec collision ever bites.
 fn which(bin: &str) -> Option<String> {
     let path = std::env::var_os("PATH")?;

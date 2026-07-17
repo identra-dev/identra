@@ -1,6 +1,6 @@
 //! The canvas store. The layout is the source of truth and lives in the user's project at
 //! `.identra/canvas.json`. Writes are atomic (temp file + rename); debouncing is the caller's
-//! job — the UI already knows when a drag ends, so it throttles there instead of here.
+//! job: the UI already knows when a drag ends, so it throttles there instead of here.
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -95,7 +95,7 @@ pub fn canvas_path(project_dir: &Path) -> PathBuf {
     project_dir.join(".identra").join("canvas.json")
 }
 
-/// Read the saved canvas, or an empty one if there's nothing valid on disk. Never fails —
+/// Read the saved canvas, or an empty one if there's nothing valid on disk. Never fails:
 /// a missing or corrupt file just means a blank board, not a crash.
 pub fn load(project_dir: &Path) -> Canvas {
     std::fs::read_to_string(canvas_path(project_dir))
