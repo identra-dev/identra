@@ -23,7 +23,11 @@ function BrowserNodeImpl({ id, data }: NodeProps) {
   return (
     <div className="identra-node">
       <Handle type="target" position={Position.Left} className="identra-port" />
-      <Handle type="source" position={Position.Right} className="identra-port" />
+      <Handle
+        type="source"
+        position={Position.Right}
+        className="identra-port"
+      />
       <div className="identra-node__header">
         <span className="identra-node__icon" style={{ background: icon.tile }}>
           {icon.glyph}
