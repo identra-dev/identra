@@ -9,36 +9,52 @@
 //! testable against a fake, no live terminal or HTTP transport needed. `TerminalManager`
 //! satisfies `NodeIo`, so wiring the real bus is one blanket impl, not a rewrite.
 //!
-//! [`tasks`] is the other half of working together: talking coordinates, a board commits. It is
-//! separate because a claim has to be atomic, which is a database's job, not a message's.
+//! [`tasks`] and [`inbox`] are the other half of working together. Talking coordinates, a board
+//! commits, and a queue is what makes talking reliable. All three are separate because they fail
+//! differently: a claim has to be atomic, a message has to be delivered exactly once, and a peer
+//! read has to reflect the wire that exists right now.
 
 pub mod config;
+pub mod inbox;
 pub mod server;
 pub mod tasks;
 
+use std::path::{Path, PathBuf};
+
 use identra_core::canvas::Edge;
 use identra_core::TerminalManager;
+
+/// One database per workspace for everything the bus remembers between calls: the task board and
+/// the message queue. Both are workspace state with the same lifetime, and one file means one thing
+/// to create, back up, or delete with the workspace.
+pub fn bus_db_path(project_dir: &Path) -> PathBuf {
+    project_dir.join(".identra").join("bus.db")
+}
+
+/// Open the workspace's bus database, creating `.identra/` on first use.
+pub fn open_bus_db(project_dir: &Path) -> Result<rusqlite::Connection, String> {
+    let path = bus_db_path(project_dir);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    rusqlite::Connection::open(path).map_err(|e| e.to_string())
+}
 
 /// Peer transcript tail is capped here. Enough to hand over what a peer just did without
 /// shipping a whole scrollback; the tail matters, the head is stale.
 const MAX_CONTEXT_BYTES: usize = 8 * 1024;
 
-/// The terminal side the bus touches: read a node's transcript, push bytes to its stdin.
-/// A trait, not `TerminalManager` directly, so the tools test against a fake with no PTY.
+/// The terminal side the bus reads: a node's transcript. A trait, not `TerminalManager` directly,
+/// so the tools test against a fake with no PTY.
 pub trait NodeIo {
     /// Current transcript bytes for `id`, or `None` if no such live node.
     fn node_snapshot(&self, id: &str) -> Option<Vec<u8>>;
-    /// Write bytes to `id`'s stdin.
-    fn node_input(&self, id: &str, data: &[u8]) -> Result<(), String>;
 }
 
 impl NodeIo for TerminalManager {
     fn node_snapshot(&self, id: &str) -> Option<Vec<u8>> {
         // Drop the seq: the bus wants the bytes, not the reattach cursor.
         self.snapshot(id).map(|(bytes, _seq)| bytes)
-    }
-    fn node_input(&self, id: &str, data: &[u8]) -> Result<(), String> {
-        self.input(id, data).map_err(|e| e.to_string())
     }
 }
 
@@ -48,8 +64,6 @@ pub enum BusError {
     NoEdge,
     /// Peer is wired but not running (no snapshot to read).
     NoPeer,
-    /// The underlying PTY write failed.
-    Input(String),
 }
 
 /// Node ids that share an edge with `caller`, caller itself excluded, no duplicates.
@@ -88,30 +102,6 @@ pub fn get_peer_context<T: NodeIo>(
     }
     let bytes = io.node_snapshot(peer).ok_or(BusError::NoPeer)?;
     Ok(tail(&strip_ansi(&bytes), MAX_CONTEXT_BYTES))
-}
-
-/// Inject `[from <caller>] text\n` into the peer's stdin. Refuses without an edge.
-///
-/// `caller_title` is the peer-facing label (a node's title); falls back to the id when blank.
-pub fn send_to_node<T: NodeIo>(
-    caller: &str,
-    caller_title: &str,
-    peer: &str,
-    text: &str,
-    edges: &[Edge],
-    io: &T,
-) -> Result<(), BusError> {
-    if !edged(caller, peer, edges) {
-        return Err(BusError::NoEdge);
-    }
-    let label = if caller_title.is_empty() {
-        caller
-    } else {
-        caller_title
-    };
-    let line = format!("[from {label}] {text}\n");
-    io.node_input(peer, line.as_bytes())
-        .map_err(BusError::Input)
 }
 
 /// An edge joins `a` and `b` in either direction.
@@ -189,20 +179,17 @@ fn tail(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::RefCell;
     use std::collections::HashMap;
 
-    /// A canvas' worth of terminals with no PTY: fixed snapshots, recorded inputs.
+    /// A canvas' worth of terminals with no PTY: fixed snapshots, nothing running.
     struct FakeIo {
         snapshots: HashMap<String, Vec<u8>>,
-        inputs: RefCell<Vec<(String, Vec<u8>)>>,
     }
 
     impl FakeIo {
         fn new() -> Self {
             FakeIo {
                 snapshots: HashMap::new(),
-                inputs: RefCell::new(Vec::new()),
             }
         }
         fn with_snapshot(mut self, id: &str, bytes: &[u8]) -> Self {
@@ -214,10 +201,6 @@ mod tests {
     impl NodeIo for FakeIo {
         fn node_snapshot(&self, id: &str) -> Option<Vec<u8>> {
             self.snapshots.get(id).cloned()
-        }
-        fn node_input(&self, id: &str, data: &[u8]) -> Result<(), String> {
-            self.inputs.borrow_mut().push((id.into(), data.to_vec()));
-            Ok(())
         }
     }
 
@@ -248,20 +231,6 @@ mod tests {
             get_peer_context("a", "b", &wired, &io).unwrap(),
             "b's transcript"
         );
-
-        // send_to_node: no edge => nothing reaches the peer.
-        assert_eq!(
-            send_to_node("a", "Node A", "b", "hi", &[], &io),
-            Err(BusError::NoEdge)
-        );
-        assert!(io.inputs.borrow().is_empty());
-
-        // With the edge, the message lands on b's stdin with the from-prefix.
-        send_to_node("a", "Node A", "b", "build the route", &wired, &io).unwrap();
-        let recorded = io.inputs.borrow();
-        assert_eq!(recorded.len(), 1);
-        assert_eq!(recorded[0].0, "b");
-        assert_eq!(recorded[0].1, b"[from Node A] build the route\n");
     }
 
     #[test]
@@ -293,13 +262,5 @@ mod tests {
             get_peer_context("a", "b", &wired, &io),
             Err(BusError::NoPeer)
         );
-    }
-
-    #[test]
-    fn send_falls_back_to_id_when_title_blank() {
-        let wired = [edge("a", "b")];
-        let io = FakeIo::new();
-        send_to_node("a", "", "b", "yo", &wired, &io).unwrap();
-        assert_eq!(io.inputs.borrow()[0].1, b"[from a] yo\n");
     }
 }

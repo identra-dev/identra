@@ -49,7 +49,7 @@ use identra_core::worktree;
 use identra_core::TerminalManager;
 use identra_memory as memory;
 
-use crate::{config, get_peer_context, list_peers, send_to_node, tasks, BusError};
+use crate::{config, get_peer_context, inbox, list_peers, tasks, BusError};
 
 /// Memories live beside the canvas, inside the workspace, because they are about that project. A
 /// workspace you delete takes its memory with it, which is the behaviour I want: no orphaned facts
@@ -295,12 +295,17 @@ fn tool_specs() -> Value {
         },
         {
             "name": "send_to_node",
-            "description": "Send a line of text into a wired peer node's terminal. It arrives prefixed with your node name.",
+            "description": "Send a message to a wired peer. It is queued and waits until they read it, so it is not lost if they are busy, and they are nudged that it arrived. Say what you did, what you changed, and what you need back. If you have nothing to say, say nothing: silence is how a run between agents ends.",
             "inputSchema": {
                 "type": "object",
                 "properties": {"nodeId": {"type": "string"}, "text": {"type": "string"}},
                 "required": ["nodeId", "text"]
             }
+        },
+        {
+            "name": "check_inbox",
+            "description": "Read the messages your peers have sent you. Each one is delivered once, so read them when you are nudged that they arrived, and act on them before you carry on.",
+            "inputSchema": {"type": "object", "properties": {}, "additionalProperties": false}
         },
         {
             "name": "add_memory",
@@ -441,24 +446,24 @@ async fn call_tool(bus: &Bus, caller: &str, params: Option<&Value>) -> Value {
             }
         }
         "send_to_node" => {
-            let title = canvas
-                .nodes
-                .iter()
-                .find(|n| n.id == caller)
-                .map(|n| n.title.clone())
-                .unwrap_or_default();
-            match send_to_node(
+            let title = node_title(&canvas, caller);
+            match queue_message(
+                &dir,
                 caller,
                 &title,
                 &arg_str("nodeId"),
                 &arg_str("text"),
                 edges,
-                &*bus.manager,
+                bus,
             ) {
-                Ok(()) => ok_text("delivered"),
-                Err(e) => err_text(&bus_err(e)),
+                Ok(msg) => ok_text(&msg),
+                Err(e) => err_text(&e),
             }
         }
+        "check_inbox" => match read_inbox(&dir, caller) {
+            Ok(text) => ok_text(&text),
+            Err(e) => err_text(&e),
+        },
         // Memory is not edge gated. An edge says who may read your terminal, which is a live,
         // private thing; memory is what the project knows, and every node in the workspace shares
         // it. Gating recall behind a wire would defeat the point: the whole value is that an agent
@@ -655,6 +660,67 @@ fn board(project_dir: &std::path::Path) -> Result<tasks::Board, String> {
     tasks::Board::open(project_dir)
 }
 
+fn node_title(canvas: &canvas::Canvas, id: &str) -> String {
+    canvas
+        .nodes
+        .iter()
+        .find(|n| n.id == id)
+        .map(|n| {
+            if n.title.is_empty() {
+                n.kind.clone()
+            } else {
+                n.title.clone()
+            }
+        })
+        .unwrap_or_else(|| id.to_string())
+}
+
+/// Put a message in the peer's queue, then tell them it is there.
+///
+/// The queue is the delivery, and the nudge is only a prompt to read it. That split is the point:
+/// the nudge races the peer's typing exactly as a raw stdin write would, but it can be garbled or
+/// missed without costing anything, because the message itself is waiting either way. Sending the
+/// body itself down that channel is what used to make delivery a guess.
+fn queue_message(
+    project_dir: &std::path::Path,
+    caller: &str,
+    caller_title: &str,
+    peer: &str,
+    text: &str,
+    edges: &[canvas::Edge],
+    bus: &Bus,
+) -> Result<String, String> {
+    // The wire is still the authorization: no edge, no message. Checking it here keeps the rule in
+    // one place for every peer tool.
+    if !crate::list_peers(caller, edges).iter().any(|p| p == peer) {
+        return Err(bus_err(BusError::NoEdge));
+    }
+    let queue = inbox::Inbox::open(project_dir)?;
+    queue.send(peer, caller, caller_title, text, now())?;
+
+    let waiting = queue.waiting(peer)?;
+    // Best effort by design. A peer that is not running yet has nothing to nudge, and that is fine:
+    // it reads its queue when it starts. Failing the send here would report a lost message that is
+    // not lost.
+    let line = format!(
+        "\r\n[identra] {waiting} message(s) waiting from your peers. Call check_inbox to read them.\r\n"
+    );
+    let _ = bus.manager.input(peer, line.as_bytes());
+
+    Ok(format!(
+        "queued for {peer}. They will read it when they check their inbox; it is not lost if they are busy."
+    ))
+}
+
+fn read_inbox(project_dir: &std::path::Path, caller: &str) -> Result<String, String> {
+    let queue = inbox::Inbox::open(project_dir)?;
+    let messages = queue.drain(caller, now())?;
+    if messages.is_empty() {
+        return Ok("no new messages".into());
+    }
+    Ok(inbox::render(&messages))
+}
+
 fn now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -729,7 +795,6 @@ fn bus_err(e: BusError) -> String {
     match e {
         BusError::NoEdge => "no edge to that node: draw a wire to it first".into(),
         BusError::NoPeer => "that peer is wired but not running yet".into(),
-        BusError::Input(s) => format!("could not deliver: {s}"),
     }
 }
 
@@ -840,6 +905,7 @@ mod tests {
                 "list_peers",
                 "get_peer_context",
                 "send_to_node",
+                "check_inbox",
                 "add_memory",
                 "search_memory",
                 "add_task",
@@ -920,6 +986,78 @@ mod tests {
 
         // Empty text is a caller mistake, and silently storing it would poison recall.
         assert_eq!(add(&bus, "node-a", "   ").await["isError"], true);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_message_survives_a_peer_that_is_not_listening() {
+        let dir = std::env::temp_dir().join(format!("identra-msg-tool-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let node = |id: &str, title: &str| Node {
+            id: id.into(),
+            kind: "codex".into(),
+            x: 0.0,
+            y: 0.0,
+            width: 480.0,
+            height: 320.0,
+            title: title.into(),
+            cwd: None,
+        };
+        canvas::save(
+            &dir,
+            &Canvas {
+                nodes: vec![node("a", "Route"), node("b", "Tests"), node("c", "Docs")],
+                edges: vec![Edge {
+                    id: "e1".into(),
+                    source: "a".into(),
+                    target: "b".into(),
+                }],
+                ..Canvas::default()
+            },
+        )
+        .unwrap();
+        let bus = bus_in(dir.clone());
+        let text = |v: &Value| v["content"][0]["text"].as_str().unwrap().to_string();
+
+        // b is not running: there is no PTY to write to at all. Under the old stdin push this
+        // message was simply gone, and a said "delivered".
+        let sent = call_tool(
+            &bus,
+            "a",
+            Some(&json!({"name": "send_to_node", "arguments": {"nodeId": "b", "text": "route is on GET /health"}})),
+        )
+        .await;
+        assert_eq!(
+            sent["isError"], false,
+            "queueing does not need a live peer: {sent}"
+        );
+        assert!(text(&sent).contains("not lost if they are busy"));
+
+        // b reads it whenever it gets round to it, with the text exactly as a wrote it.
+        let got = call_tool(&bus, "b", Some(&json!({"name": "check_inbox"}))).await;
+        assert_eq!(got["isError"], false);
+        assert!(text(&got).contains("[Route]: route is on GET /health"));
+        // And it is told where that text came from, so a peer cannot pose as its user.
+        assert!(text(&got).contains("not from your user"));
+
+        // Delivered once. Otherwise the same message lands in b's context on every single turn.
+        let again = call_tool(&bus, "b", Some(&json!({"name": "check_inbox"}))).await;
+        assert!(text(&again).contains("no new messages"));
+
+        // The wire is still the authorization: c is on the canvas but not wired to a.
+        let refused = call_tool(
+            &bus,
+            "a",
+            Some(&json!({"name": "send_to_node", "arguments": {"nodeId": "c", "text": "hi"}})),
+        )
+        .await;
+        assert_eq!(refused["isError"], true);
+        assert!(text(&refused).contains("no edge"));
+        assert!(
+            text(&call_tool(&bus, "c", Some(&json!({"name": "check_inbox"}))).await)
+                .contains("no new messages")
+        );
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

@@ -13,7 +13,7 @@
 //! A claim is not a lock forever. If the agent holding a task is gone, the task returns to the pool
 //! rather than stranding the work, because the alternative is a board that silently stops.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -34,10 +34,6 @@ CREATE TABLE IF NOT EXISTS task_deps (
 );
 ";
 
-pub fn tasks_path(project_dir: &Path) -> PathBuf {
-    project_dir.join(".identra").join("tasks.db")
-}
-
 /// What an agent needs to decide whether to take a task.
 #[derive(Debug, PartialEq)]
 pub struct Task {
@@ -56,11 +52,7 @@ pub struct Board {
 
 impl Board {
     pub fn open(project_dir: &Path) -> Result<Board, String> {
-        let path = tasks_path(project_dir);
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-        }
-        let conn = Connection::open(path).map_err(|e| e.to_string())?;
+        let conn = crate::open_bus_db(project_dir)?;
         conn.execute_batch(SCHEMA).map_err(|e| e.to_string())?;
         Ok(Board { conn })
     }
@@ -296,7 +288,7 @@ pub fn render(task: &Task) -> String {
 mod tests {
     use super::*;
 
-    fn board(name: &str) -> (Board, PathBuf) {
+    fn board(name: &str) -> (Board, std::path::PathBuf) {
         let dir = std::env::temp_dir().join(format!("identra-tasks-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         (Board::open(&dir).unwrap(), dir)
