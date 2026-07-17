@@ -95,13 +95,49 @@ pub fn canvas_path(project_dir: &Path) -> PathBuf {
     project_dir.join(".identra").join("canvas.json")
 }
 
-/// Read the saved canvas, or an empty one if there's nothing valid on disk. Never fails:
-/// a missing or corrupt file just means a blank board, not a crash.
+/// Read the saved canvas, or an empty one if there is nothing valid on disk. Never fails: a missing
+/// or unreadable file means a blank board, not a crash.
+///
+/// A file that exists but will not parse is moved to `canvas.json.bak` first, and this is the whole
+/// point of the function. Returning a blank board leaves the app one debounced save away from
+/// renaming a fresh canvas over the only copy of the user's board, so the bad parse would eat the
+/// work rather than report it. Moving it aside costs a rename and means the layout is still on disk
+/// for someone to fish out. It is also why the corrupt file goes away rather than being copied: if
+/// it stayed, every later load would warn about a file nothing will ever read again.
 pub fn load(project_dir: &Path) -> Canvas {
-    std::fs::read_to_string(canvas_path(project_dir))
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    let path = canvas_path(project_dir);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        // No file is the first run in a workspace, which is not worth a word.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Canvas::default(),
+        Err(e) => {
+            eprintln!(
+                "identra: cannot read {}, starting blank: {e}",
+                path.display()
+            );
+            return Canvas::default();
+        }
+    };
+    match serde_json::from_str(&text) {
+        Ok(canvas) => canvas,
+        Err(e) => {
+            let bak = path.with_extension("json.bak");
+            match std::fs::rename(&path, &bak) {
+                Ok(()) => eprintln!(
+                    "identra: {} did not parse ({e}), kept it as {} and started blank",
+                    path.display(),
+                    bak.display()
+                ),
+                // I could not move it, so I must not let the caller save over it.
+                Err(move_err) => eprintln!(
+                    "identra: {} did not parse ({e}) and could not be kept ({move_err}). \
+                     Copy it somewhere before you touch this workspace again",
+                    path.display()
+                ),
+            }
+            Canvas::default()
+        }
+    }
 }
 
 /// Write the canvas atomically. `create_dir_all` makes `.identra/` on first save.
@@ -118,6 +154,38 @@ pub fn save(project_dir: &Path, canvas: &Canvas) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The board someone spent a week arranging must survive a file that will not parse. Without
+    /// the bak, load returns blank and the next debounced save renames straight over the only copy
+    /// they had, so a truncated write during a crash quietly costs them the work. It has to still be
+    /// on disk afterwards.
+    #[test]
+    fn a_canvas_that_will_not_parse_is_kept_not_eaten() {
+        let dir = std::env::temp_dir().join(format!("identra-canvas-bad-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".identra")).unwrap();
+        let path = canvas_path(&dir);
+        // Half a write, which is what a crash mid-save leaves behind.
+        std::fs::write(&path, r#"{"nodes":[{"id":"n1","kind":"co"#).unwrap();
+
+        assert_eq!(load(&dir), Canvas::default(), "a bad parse starts blank");
+
+        let bak = path.with_extension("json.bak");
+        assert!(bak.exists(), "the unparseable canvas is kept as .bak");
+        assert!(
+            std::fs::read_to_string(&bak).unwrap().contains("\"n1\""),
+            "and it is kept whole, so the layout can be recovered from it"
+        );
+
+        // The save that follows a blank load must not be able to reach it.
+        save(&dir, &Canvas::default()).unwrap();
+        assert!(
+            bak.exists(),
+            "saving over a blank board leaves the .bak alone"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn save_then_load_roundtrips() {

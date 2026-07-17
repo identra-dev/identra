@@ -793,3 +793,18 @@ body {
   background: var(--header);
   color: var(--text);
 }
+
+/* The canvas is not reaching the disk. It sits above everything and does not go away on its own,
+   because every edit made past this point is work the user is going to lose. */
+.identra-save-error {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  padding: 8px 14px;
+  background: #c01c28;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
+}

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ReactFlow,
   Background,
@@ -41,6 +42,9 @@ import {
 type FNode = Node<AgentNodeData>;
 
 const nodeTypes = { agent: AgentNode, browser: BrowserNode, note: NoteNode };
+// Long enough that a drag is one write rather than sixty, short enough that the window I have to
+// flush on close stays small.
+const SAVE_DEBOUNCE_MS = 400;
 const DEFAULT_W = 480;
 const DEFAULT_H = 320;
 
@@ -75,6 +79,9 @@ export default function App() {
   const [edges, setEdges] = useState<FEdge[]>([]);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [panelOpen, setPanelOpen] = useState(false);
+  // Set when a write to disk fails. The board is on screen and not saved, and the only wrong move
+  // is to say nothing.
+  const [saveError, setSaveError] = useState<string | null>(null);
   const viewport = useRef<Viewport>({ x: 0, y: 0, zoom: 1 });
   // scheduleSave persists the whole canvas but each handler only has its own slice; these refs
   // hold the latest of both so a save always writes a consistent nodes+edges pair.
@@ -82,6 +89,8 @@ export default function App() {
   const edgesRef = useRef<FEdge[]>([]);
   const titleRef = useRef("");
   const saveTimer = useRef<number | undefined>(undefined);
+  // Is the board on screen different from the board on disk. This is what the close handler asks.
+  const unsaved = useRef(false);
   // The canvas-command handler runs outside React's render, so it reads agents from a ref rather
   // than closing over state that would be stale by the time an agent calls.
   const agentsRef = useRef<AgentInfo[]>([]);
@@ -134,22 +143,67 @@ export default function App() {
     setWorkspace(w);
   }, []);
 
+  // The whole board, from the refs, so a save always writes a consistent nodes+edges pair.
+  const snapshot = useCallback(
+    () => ({
+      nodes: nodesRef.current.map(toCanvasNode),
+      edges: edgesRef.current.map((e) => ({
+        id: e.id,
+        source: e.source,
+        target: e.target,
+      })),
+      viewport: viewport.current,
+      title: titleRef.current,
+    }),
+    [],
+  );
+
+  // Write now and wait for it. A failure here is the user's layout not being on disk, so it goes on
+  // the screen: this used to be a bare `void canvasSave(...)`, which meant a full disk or a
+  // read-only workspace looked exactly like a successful save until the app was reopened and the
+  // work was gone.
+  const saveNow = useCallback(async () => {
+    window.clearTimeout(saveTimer.current);
+    try {
+      await canvasSave(snapshot());
+      unsaved.current = false;
+      setSaveError(null);
+    } catch (e) {
+      // Leave unsaved set. The board on screen is still not the board on disk, and the next close
+      // should try again rather than assume this one counted.
+      setSaveError(String(e));
+    }
+  }, [snapshot]);
+
   // Debounced atomic save. The engine writes atomically; we just avoid thrashing on drag.
   const scheduleSave = useCallback(() => {
+    unsaved.current = true;
     window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(() => {
-      void canvasSave({
-        nodes: nodesRef.current.map(toCanvasNode),
-        edges: edgesRef.current.map((e) => ({
-          id: e.id,
-          source: e.source,
-          target: e.target,
-        })),
-        viewport: viewport.current,
-        title: titleRef.current,
-      });
-    }, 400);
-  }, []);
+      void saveNow();
+    }, SAVE_DEBOUNCE_MS);
+  }, [saveNow]);
+
+  // Closing inside the debounce window drops whatever was moved last, and dragging a node and then
+  // quitting is a completely ordinary thing to do. I hold the close, flush, then let it go.
+  //
+  // The question is "is there work not on disk", which is why it asks `unsaved` and not the timer:
+  // clearTimeout does not reset the handle, so a timer ref is only ever undefined before the very
+  // first save and would answer "yes, pending" forever after. If the flush fails the error is
+  // already on screen, and I still close, because refusing to quit over a failed save traps someone
+  // in an app they are trying to leave.
+  useEffect(() => {
+    const win = getCurrentWindow();
+    const pending = win.onCloseRequested(async (event) => {
+      if (!unsaved.current) return;
+      event.preventDefault();
+      await saveNow();
+      void win.destroy();
+    });
+    return () => {
+      void pending.then((unlisten) => unlisten());
+    };
+  }, [saveNow]);
 
   const onNodesChange = useCallback(
     (changes: NodeChange<FNode>[]) => {
@@ -332,6 +386,14 @@ export default function App() {
 
   return (
     <div className="identra-root">
+      {saveError !== null && (
+        // It stays until a save works. A canvas that is not on disk is not a thing to mention once
+        // and then hide: every drag from here is work that will not be there tomorrow, and the user
+        // is the only one who can do anything about a full disk or a folder they cannot write to.
+        <div className="identra-save-error" role="alert">
+          <strong>This workspace is not being saved.</strong> {saveError}
+        </div>
+      )}
       <ReactFlow<FNode>
         nodes={nodes}
         edges={edges}
