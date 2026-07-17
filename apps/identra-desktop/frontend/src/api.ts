@@ -72,5 +72,10 @@ export const canvasLoad = () => invoke<Canvas>("canvas_load");
 export const canvasSave = (canvas: Canvas) =>
   invoke<void>("canvas_save", { canvas });
 
+// Point codex at the running context bus by writing its MCP config. Called when the first edge is
+// drawn, since codex reads its server list only at launch.
+export const writeAgentMcpConfig = () =>
+  invoke<void>("write_agent_mcp_config");
+
 export const onOutput = (cb: (e: OutputEvent) => void): Promise<UnlistenFn> =>
   listen<OutputEvent>("terminal://output", (evt) => cb(evt.payload));

@@ -23,6 +23,7 @@ import {
   canvasSave,
   detectAgents,
   terminalKill,
+  writeAgentMcpConfig,
   type AgentInfo,
   type Canvas,
   type CanvasNode,
@@ -70,6 +71,8 @@ export default function App() {
   const edgesRef = useRef<FEdge[]>([]);
   const [ready, setReady] = useState(false);
   const saveTimer = useRef<number | undefined>(undefined);
+  // The bus config is written once per session, the first time a wire appears.
+  const busConfigWritten = useRef(false);
 
   useEffect(() => {
     void canvasLoad().then((c: Canvas) => {
@@ -132,6 +135,15 @@ export default function App() {
         scheduleSave();
         return next;
       });
+      // Write the bus into codex's config the moment the first wire exists, so a codex node
+      // launched after this picks up the tools at startup. It fails harmlessly if codex is not
+      // set up: the edge still draws and persists, there is just no bus to join.
+      if (!busConfigWritten.current) {
+        busConfigWritten.current = true;
+        void writeAgentMcpConfig().catch((e) => {
+          console.warn("identra: could not write the codex bus config", e);
+        });
+      }
     },
     [scheduleSave],
   );
