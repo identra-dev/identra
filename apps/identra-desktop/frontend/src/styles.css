@@ -746,3 +746,50 @@ body {
     animation: none;
   }
 }
+
+/* Two ways in, and they are not equal: real work happens in a folder you already have, so that is
+   the filled button and an empty workspace is the quiet one beside it. */
+.identra-picker__actions {
+  display: flex;
+  gap: 8px;
+}
+.identra-picker__open {
+  flex: 1;
+  background: var(--yaru-orange);
+  color: #fff;
+  border: 0;
+  border-radius: 6px;
+  padding: 10px 14px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.identra-picker__open:hover {
+  filter: brightness(1.08);
+}
+.identra-picker__open:disabled,
+.identra-picker__new:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.identra-picker__actions .identra-picker__new {
+  flex: 1;
+  background: transparent;
+  border: 1px solid var(--panel-edge);
+  color: var(--text);
+}
+.identra-picker__actions .identra-picker__new:hover:not(:disabled) {
+  border-color: var(--yaru-orange);
+  filter: none;
+}
+
+/* Removing an adopted folder only forgets it, so it is not painted as destruction. Deleting one
+   Identra made takes the folder, and that one turns red. */
+.identra-ws__del[data-destructive="true"]:hover {
+  background: #5c1a13;
+  color: #f66151;
+}
+.identra-ws__del[data-destructive="false"]:hover {
+  background: var(--header);
+  color: var(--text);
+}

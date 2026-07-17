@@ -26,9 +26,11 @@ import {
   canvasCommandResult,
   canvasSave,
   detectAgents,
+  isAdopted,
   onCanvasCommand,
   terminalKill,
   workspaceOpen,
+  workspaceOpenRecent,
   type AgentInfo,
   type CanvasCommand,
   type CanvasNode,
@@ -116,7 +118,12 @@ export default function App() {
   // Opening is what makes a workspace active in the engine: it repoints the canvas, and writes the
   // bus config and the agent guide into that folder so any agent launched here can find its peers.
   const openWorkspace = useCallback(async (w: WorkspaceMeta) => {
-    const canvas = await workspaceOpen(w.slug);
+    // Two lookups, because there are two kinds of id. A workspace Identra made is found by slug in
+    // the root; a folder you opened is found by path on the remembered list. Both are chosen from a
+    // list the engine built, which is what stops either from being a path the window made up.
+    const canvas = isAdopted(w)
+      ? await workspaceOpenRecent(w.path)
+      : await workspaceOpen(w.slug);
     const loaded = canvas.nodes.map(toFlow);
     nodesRef.current = loaded;
     edgesRef.current = canvas.edges;

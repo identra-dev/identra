@@ -1,8 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  isAdopted,
   workspaceCreate,
   workspaceDelete,
+  workspaceForgetRecent,
   workspaceList,
+  workspacePickFolder,
+  workspaceRecents,
   workspaceRename,
   type WorkspaceMeta,
 } from "./api";
@@ -33,7 +37,10 @@ export default function WorkspaceMenu({
 
   useEffect(() => {
     if (!open) return;
-    void workspaceList().then(setAll, (e) => setError(String(e)));
+    Promise.all([workspaceList(), workspaceRecents()]).then(
+      ([made, opened]) => setAll([...opened, ...made]),
+      (e) => setError(String(e)),
+    );
     // Any click that is not in here closes it. A menu you have to aim at to dismiss is a menu that
     // is in your way.
     const away = (e: MouseEvent) => {
@@ -62,17 +69,27 @@ export default function WorkspaceMenu({
     }
   };
 
+  const refresh = async () =>
+    setAll([...(await workspaceRecents()), ...(await workspaceList())]);
+
+  // Two different acts wearing one button, so they are never the same button.
+  //
+  // A folder you opened is your code. Identra did not make it and has no business deleting it, so
+  // the most it does is stop listing it. A workspace Identra made is Identra's, and removing it
+  // takes the folder, so that one asks first and says what it is taking.
   const remove = async (w: WorkspaceMeta) => {
-    // A folder full of the user's work, so the confirm says which folder and what goes with it.
-    // Nothing here is recoverable and there is no undo to offer.
-    const sure = window.confirm(
-      `Delete "${w.title}" and everything in it?\n\n${w.path}\n\nThe folder and any work the agents did in it are removed. This cannot be undone.`,
-    );
-    if (!sure) return;
     try {
-      await workspaceDelete(w.slug);
+      if (isAdopted(w)) {
+        await workspaceForgetRecent(w.path);
+      } else {
+        const sure = window.confirm(
+          `Delete "${w.title}" and everything in it?\n\n${w.path}\n\nThe folder and any work the agents did in it are removed. This cannot be undone.`,
+        );
+        if (!sure) return;
+        await workspaceDelete(w.slug);
+      }
       if (w.slug === workspace.slug) onDeleted();
-      else setAll(await workspaceList());
+      else await refresh();
     } catch (e) {
       setError(String(e));
     }
@@ -126,7 +143,12 @@ export default function WorkspaceMenu({
                 </button>
                 <button
                   className="identra-ws__del"
-                  title={`Delete ${w.title}`}
+                  data-destructive={!isAdopted(w)}
+                  title={
+                    isAdopted(w)
+                      ? `Remove ${w.title} from this list (the folder is left alone)`
+                      : `Delete ${w.title} and its folder`
+                  }
                   onClick={() => void remove(w)}
                 >
                   &times;
@@ -135,6 +157,19 @@ export default function WorkspaceMenu({
             ))}
           </ul>
           <div className="identra-ws__actions">
+            <button
+              onClick={async () => {
+                setOpen(false);
+                try {
+                  const picked = await workspacePickFolder();
+                  if (picked) onOpen(picked);
+                } catch (e) {
+                  setError(String(e));
+                }
+              }}
+            >
+              Open a folder
+            </button>
             <button
               onClick={() => {
                 setOpen(false);
@@ -153,7 +188,7 @@ export default function WorkspaceMenu({
                 }
               }}
             >
-              New workspace
+              New empty workspace
             </button>
           </div>
           {error && <p className="identra-ws__error">{error}</p>}

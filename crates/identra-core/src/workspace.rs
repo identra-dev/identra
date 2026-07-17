@@ -126,6 +126,121 @@ pub fn create(root: &Path, title: &str) -> io::Result<WorkspaceMeta> {
     })
 }
 
+/// Where the list of folders opened as workspaces lives.
+///
+/// A workspace made here is found by scanning the root, but a folder you already had is somewhere
+/// else entirely and there is nothing to scan. So the ones you have opened are remembered, and that
+/// list is also the authorization: opening a remembered folder is opening one you chose before,
+/// which is why nothing else accepts a path from outside.
+fn recents_path() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("IDENTRA_RECENTS_FILE") {
+        return Some(PathBuf::from(dir));
+    }
+    let home = std::env::var_os("HOME")?;
+    Some(
+        Path::new(&home)
+            .join(".local")
+            .join("share")
+            .join("identra")
+            .join("recents.json"),
+    )
+}
+
+fn read_recents(file: &Path) -> Vec<PathBuf> {
+    std::fs::read_to_string(file)
+        .ok()
+        .and_then(|t| serde_json::from_str::<Vec<PathBuf>>(&t).ok())
+        .unwrap_or_default()
+}
+
+fn write_recents(file: &Path, list: &[PathBuf]) -> io::Result<()> {
+    if let Some(dir) = file.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = file.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_vec_pretty(list)?)?;
+    std::fs::rename(&tmp, file)
+}
+
+/// Folders opened as workspaces, most recent first, skipping any that are gone.
+///
+/// A remembered folder that has been deleted or moved is not an error worth showing: it is just not
+/// there any more, and a list of dead rows is worse than a short list.
+pub fn recents() -> Vec<WorkspaceMeta> {
+    let Some(file) = recents_path() else {
+        return Vec::new();
+    };
+    read_recents(&file)
+        .into_iter()
+        .filter(|p| canvas::canvas_path(p).is_file())
+        .map(|p| WorkspaceMeta {
+            slug: p.display().to_string(),
+            title: canvas::load(&p).title,
+            path: p.display().to_string(),
+        })
+        .collect()
+}
+
+/// Turn a folder the user already has into a workspace, and remember it.
+///
+/// This is the difference between a scratch pad and a tool: a workspace you make here is empty, and
+/// the code someone actually wants agents to work on is already somewhere on their disk. Adopting
+/// adds `.identra/` and nothing else, so the folder stays theirs, and their repo is not reshaped to
+/// suit us.
+///
+/// The path is the caller's to justify. Nothing in the app takes one from the window: it comes from
+/// the user picking a folder, or from the remembered list, both of which are the user's own choice.
+pub fn adopt(path: &Path) -> io::Result<WorkspaceMeta> {
+    if !path.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("{} is not a folder", path.display()),
+        ));
+    }
+    // A folder that is already a workspace keeps its canvas and its name. Adopting twice must not
+    // wipe the board someone has been working on.
+    if !canvas::canvas_path(path).is_file() {
+        let title = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| DEFAULT_TITLE.to_string());
+        canvas::save(
+            path,
+            &Canvas {
+                title,
+                ..Canvas::default()
+            },
+        )?;
+    }
+
+    if let Some(file) = recents_path() {
+        let mut list = read_recents(&file);
+        // Dedupe and promote: reopening a folder moves it to the top rather than listing it twice.
+        list.retain(|p| p != path);
+        list.insert(0, path.to_path_buf());
+        list.truncate(RECENTS_MAX);
+        let _ = write_recents(&file, &list);
+    }
+
+    Ok(WorkspaceMeta {
+        slug: path.display().to_string(),
+        title: canvas::load(path).title,
+        path: path.display().to_string(),
+    })
+}
+
+/// Long enough to find the thing you were on last week, short enough that the list stays a list.
+const RECENTS_MAX: usize = 20;
+
+/// Stop remembering a folder. The folder itself is untouched: this is a list, not the work.
+pub fn forget_recent(path: &Path) {
+    if let Some(file) = recents_path() {
+        let mut list = read_recents(&file);
+        list.retain(|p| p != path);
+        let _ = write_recents(&file, &list);
+    }
+}
+
 /// Give a workspace a new name, moving its folder to match.
 ///
 /// The folder is the id, so a rename is a move, and a move is the part that can go wrong: the
@@ -193,6 +308,7 @@ pub fn delete(root: &Path, slug: &str) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::canvas::Node;
 
     #[test]
     fn slugs_are_safe_folder_names() {
@@ -201,6 +317,73 @@ mod tests {
         assert_eq!(slugify("../../etc/passwd"), "etc-passwd"); // no traversal survives
         assert_eq!(slugify(""), DEFAULT_TITLE);
         assert_eq!(slugify("!!!"), DEFAULT_TITLE);
+    }
+
+    #[test]
+    fn adopting_a_real_folder_leaves_it_alone_and_remembers_it() {
+        let base = std::env::temp_dir().join(format!("identra-adopt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let repo = base.join("my-app");
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        std::fs::write(repo.join("src/main.rs"), "fn main() {}").unwrap();
+        std::env::set_var("IDENTRA_RECENTS_FILE", base.join("recents.json"));
+
+        let out = adopt(&repo).unwrap();
+        assert_eq!(out.title, "my-app", "the folder names itself");
+        assert_eq!(out.path, repo.display().to_string());
+        // Adopting adds .identra and nothing else. This is someone's repo, not ours to reshape.
+        assert!(canvas::canvas_path(&repo).is_file());
+        assert_eq!(
+            std::fs::read_to_string(repo.join("src/main.rs")).unwrap(),
+            "fn main() {}"
+        );
+        assert_eq!(recents()[0].path, repo.display().to_string());
+
+        // Adopting twice keeps the board someone has been working on rather than wiping it.
+        let mut board = canvas::load(&repo);
+        board.title = "My App".into();
+        board.nodes.push(Node {
+            id: "n1".into(),
+            kind: "codex".into(),
+            x: 0.0,
+            y: 0.0,
+            width: 480.0,
+            height: 320.0,
+            title: "codex".into(),
+            cwd: None,
+        });
+        canvas::save(&repo, &board).unwrap();
+        let again = adopt(&repo).unwrap();
+        assert_eq!(again.title, "My App", "its name survives");
+        assert_eq!(canvas::load(&repo).nodes.len(), 1, "its canvas survives");
+        assert_eq!(
+            recents().len(),
+            1,
+            "reopening promotes, it does not duplicate"
+        );
+
+        // A second folder goes to the top, and the first is still there behind it.
+        let other = base.join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        adopt(&other).unwrap();
+        assert_eq!(recents()[0].path, other.display().to_string());
+        assert_eq!(recents().len(), 2);
+
+        // A folder that has gone away is not an error, it is just not on the list any more.
+        std::fs::remove_dir_all(&other).unwrap();
+        assert_eq!(recents().len(), 1);
+        assert_eq!(recents()[0].path, repo.display().to_string());
+
+        forget_recent(&repo);
+        assert_eq!(recents().len(), 0);
+        assert!(
+            repo.is_dir(),
+            "forgetting a folder does not touch the folder"
+        );
+
+        assert!(adopt(&base.join("nope")).is_err());
+        std::env::remove_var("IDENTRA_RECENTS_FILE");
+        std::fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]
@@ -276,6 +459,46 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn an_absolute_slug_cannot_turn_delete_into_someone_elses_repo() {
+        let root = std::env::temp_dir().join(format!("identra-ws-abs-{}", std::process::id()));
+        let outside = std::env::temp_dir().join(format!("identra-repo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+        std::fs::create_dir_all(&root).unwrap();
+
+        // A real repo the user adopted. It has a canvas, so it looks exactly like a workspace to
+        // anything that only checks for one.
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("precious.rs"), "fn main() {}").unwrap();
+        canvas::save(&outside, &Canvas::default()).unwrap();
+
+        // join() with an absolute path replaces the base rather than extending it, so an adopted
+        // folder's own path, used as a slug, resolves straight back to the repo. That is the trap:
+        // a caller that joins a slug it did not build would recursively delete the user's code.
+        assert_eq!(
+            root.join(outside.to_str().unwrap()),
+            outside,
+            "an absolute slug escapes the root entirely"
+        );
+
+        // The list is the guard. It only ever reports children of the root, so a caller that picks
+        // from it cannot name the repo, whatever it is handed.
+        assert!(
+            !list(&root)
+                .iter()
+                .any(|w| w.path == outside.display().to_string()),
+            "an adopted folder is never a workspace in the root"
+        );
+        assert!(
+            outside.join("precious.rs").is_file(),
+            "and it is still there"
+        );
+
+        std::fs::remove_dir_all(&root).unwrap();
+        std::fs::remove_dir_all(&outside).unwrap();
     }
 
     #[test]

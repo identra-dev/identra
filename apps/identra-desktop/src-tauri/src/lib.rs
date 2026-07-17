@@ -2,7 +2,7 @@
 //! and the active workspace, and forwards typed commands to `identra-core`. All the real logic
 //! lives in the engine so this file stays boring.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use identra_core::canvas::{self, Canvas};
@@ -14,6 +14,7 @@ use identra_mcp::server::Bus;
 use identra_memory::Memory;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_dialog::DialogExt;
 
 struct AppState {
     manager: Arc<TerminalManager>,
@@ -244,6 +245,62 @@ fn workspace_open(state: State<AppState>, slug: String) -> Result<Canvas, String
     Ok(canvas::load(&path))
 }
 
+/// Folders the user has opened as workspaces before.
+#[tauri::command]
+fn workspace_recents() -> Vec<WorkspaceMeta> {
+    workspace::recents()
+}
+
+/// Ask for a folder and open it as a workspace.
+///
+/// The picker is the authorization, which is why this is one command rather than a pick that hands
+/// a path to the window and an open that takes one back. A path that never crosses that boundary is
+/// a path the window cannot choose: opening a workspace writes into the folder and points every
+/// agent at it, so "the user picked it in a native dialog" has to be the only way one gets here.
+///
+/// Returns `None` when the dialog is cancelled, which is an answer, not a failure.
+#[tauri::command]
+async fn workspace_pick_folder(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<WorkspaceMeta>, String> {
+    let picked = app
+        .dialog()
+        .file()
+        .set_title("Open a folder as a workspace")
+        .blocking_pick_folder();
+    let Some(folder) = picked else {
+        return Ok(None);
+    };
+    let path = folder
+        .into_path()
+        .map_err(|e| format!("that folder cannot be opened: {e}"))?;
+    let meta = workspace::adopt(&path).map_err(|e| e.to_string())?;
+    state.activate(path)?;
+    Ok(Some(meta))
+}
+
+/// Reopen a folder from the remembered list.
+///
+/// Same rule as opening a workspace by slug: the path has to be one already on the list, which the
+/// user put there by picking it. A path from the window is not evidence of anything.
+#[tauri::command]
+fn workspace_open_recent(state: State<AppState>, path: String) -> Result<Canvas, String> {
+    let known = workspace::recents()
+        .into_iter()
+        .find(|w| w.path == path)
+        .ok_or_else(|| "that folder is not one you have opened".to_string())?;
+    let dir = PathBuf::from(&known.path);
+    state.activate(dir.clone())?;
+    Ok(canvas::load(&dir))
+}
+
+/// Drop a folder from the remembered list. The folder itself is untouched.
+#[tauri::command]
+fn workspace_forget_recent(path: String) {
+    workspace::forget_recent(&PathBuf::from(path));
+}
+
 /// Rename a workspace, which moves its folder. If it was the active one, follow it: the old path
 /// no longer exists, and every canvas save and every agent launch reads that path.
 #[tauri::command]
@@ -261,25 +318,37 @@ fn workspace_rename(
     Ok(meta)
 }
 
-/// Delete a workspace and everything in it. The window asks first: this takes the user's files, not
-/// just the canvas.
+/// Delete a workspace Identra made, and everything in it. The window asks first: this takes the
+/// user's files, not just the canvas.
+///
+/// The slug is looked up among the workspaces in the root, never joined onto it. Joining is what
+/// makes this dangerous: an absolute path replaces the base rather than extending it, so a slug of
+/// `/home/me/my-repo` would resolve to exactly that and recursively delete a folder that was only
+/// ever adopted. A folder the user already had is not ours to delete at all, and it is not on this
+/// list, so it cannot reach the delete.
 ///
 /// Any agent still running in it is killed first. Leaving a PTY alive with its working directory
 /// deleted gives an agent that fails every command for a reason it cannot see.
 #[tauri::command]
 fn workspace_delete(state: State<AppState>, slug: String) -> Result<(), String> {
     let root = workspaces_root()?;
-    let path = root.join(&slug);
-    if state.dir() == path {
+    let found = workspace::list(&root)
+        .into_iter()
+        .find(|w| w.slug == slug)
+        .ok_or_else(|| {
+            "that is not a workspace Identra made, so it is not Identra's to delete".to_string()
+        })?;
+    if state.dir().as_path() == Path::new(&found.path) {
         for id in state.manager.ids() {
             let _ = state.manager.kill(&id);
         }
     }
-    workspace::delete(&root, &slug).map_err(|e| e.to_string())
+    workspace::delete(&root, &found.slug).map_err(|e| e.to_string())
 }
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // The sink emits each output chunk to the webview as it arrives.
             let handle: AppHandle = app.handle().clone();
@@ -369,7 +438,11 @@ pub fn run() {
             workspace_create,
             workspace_open,
             workspace_rename,
-            workspace_delete
+            workspace_delete,
+            workspace_recents,
+            workspace_pick_folder,
+            workspace_open_recent,
+            workspace_forget_recent
         ])
         .run(tauri::generate_context!())
         .expect("error while running Identra");

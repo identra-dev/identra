@@ -38,6 +38,12 @@ export type Canvas = {
 // `title` is what the user reads.
 export type WorkspaceMeta = { slug: string; title: string; path: string };
 
+// Identra made it (under the workspaces root) versus you opened a folder you already had. The two
+// behave differently in exactly one place that matters: Identra's are Identra's to delete, and
+// yours are only ever forgotten. An adopted folder carries its own path as its id, which is what
+// tells them apart.
+export const isAdopted = (w: WorkspaceMeta) => w.slug === w.path;
+
 export type Snapshot = { data: number[]; lastSeq: number };
 export type OutputEvent = { id: string; seq: number; data: number[] };
 // `code` is null when the agent was killed by a signal rather than exiting on its own.
@@ -117,6 +123,22 @@ export const workspaceCreate = (title?: string) =>
 
 export const workspaceOpen = (slug: string) =>
   invoke<Canvas>("workspace_open", { slug });
+
+// Folders you already had, opened as workspaces. This is how Identra works on real code rather than
+// only on scratch workspaces it made itself.
+export const workspaceRecents = () =>
+  invoke<WorkspaceMeta[]>("workspace_recents");
+
+// Opens a native folder picker and adopts what you choose. The path never comes from here: the
+// picker is the authorization, so the whole thing is one call.
+export const workspacePickFolder = () =>
+  invoke<WorkspaceMeta | null>("workspace_pick_folder");
+
+export const workspaceOpenRecent = (path: string) =>
+  invoke<Canvas>("workspace_open_recent", { path });
+
+export const workspaceForgetRecent = (path: string) =>
+  invoke<void>("workspace_forget_recent", { path });
 
 // Renaming moves the folder, so the returned meta carries the new slug and path. Anything holding
 // the old one is stale.
