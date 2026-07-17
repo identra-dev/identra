@@ -161,6 +161,47 @@ body {
   height: 100%;
 }
 
+/* What the project remembers, shown above the terminal when a node opens. Muted on purpose: it is
+   context the agent starts from, not an alert, so it reads as part of the node rather than over it. */
+.identra-node__recall {
+  padding: 6px 10px 8px;
+  background: #2a0a20;
+  border-bottom: 1px solid var(--panel-edge);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.identra-node__recall-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--yaru-orange);
+  font-weight: 600;
+  margin-bottom: 3px;
+}
+.identra-node__recall-close {
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 2px;
+  opacity: 0.7;
+}
+.identra-node__recall-close:hover {
+  opacity: 1;
+}
+.identra-node__recall ul {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--text);
+}
+.identra-node__recall li {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .identra-dock {
   position: fixed;
   left: 50%;

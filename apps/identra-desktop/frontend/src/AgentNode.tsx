@@ -9,12 +9,14 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import {
   agentsByKind,
+  memoryList,
   onExit,
   onOutput,
   terminalInput,
   terminalResize,
   terminalSnapshot,
   terminalStart,
+  type Memory,
   type OutputEvent,
 } from "./api";
 import { pastSnapshot } from "./reattach";
@@ -31,6 +33,21 @@ function AgentNodeImpl({ id, data }: NodeProps) {
   // is the only one the node cannot infer for itself, so the engine tells it: without that, an
   // agent that finished looks exactly like one that is thinking, forever.
   const [state, setState] = useState<"ready" | "running" | "exited">("ready");
+  // What the project already knows, shown once when the node opens. This is the payoff made
+  // visible: the agent has not typed a word and the human can already see it is not starting cold.
+  // A few facts, not the whole store, because it is a glance and not the memory panel.
+  const [recall, setRecall] = useState<Memory[]>([]);
+  const [recallShown, setRecallShown] = useState(true);
+
+  useEffect(() => {
+    let dropped = false;
+    void memoryList(3).then((facts) => {
+      if (!dropped) setRecall(facts);
+    });
+    return () => {
+      dropped = true;
+    };
+  }, []);
 
   // One terminal per node, wired to the backend PTY. Runs once per mount; on a hot reload it
   // reattaches to the still-running PTY instead of restarting it.
@@ -203,6 +220,29 @@ function AgentNodeImpl({ id, data }: NodeProps) {
           &times;
         </button>
       </div>
+      {recall.length > 0 && recallShown && (
+        // Calm and earned, not a popup: it sits above the terminal, states what is known, and gets
+        // out of the way the moment the human is done with it. DESIGN.md calls this the single most
+        // important visual in the product, because it is the one that makes "it remembers" a thing
+        // you see rather than a claim you read.
+        <div className="identra-node__recall nodrag">
+          <div className="identra-node__recall-head">
+            <span>Identra remembers ({recall.length})</span>
+            <button
+              className="identra-node__recall-close"
+              title="Hide what the project remembers"
+              onClick={() => setRecallShown(false)}
+            >
+              &times;
+            </button>
+          </div>
+          <ul>
+            {recall.map((m) => (
+              <li key={m.id}>{m.content}</li>
+            ))}
+          </ul>
+        </div>
+      )}
       <div className="identra-node__term nodrag nowheel" ref={termHost} />
     </div>
   );
