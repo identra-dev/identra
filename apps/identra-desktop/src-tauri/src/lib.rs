@@ -10,6 +10,7 @@ use identra_core::terminal::{Event as TerminalEvent, TerminalManager};
 use identra_core::workspace::{self, WorkspaceMeta};
 use identra_core::{detect, AgentInfo};
 use identra_mcp::server::Bus;
+use identra_memory::Memory;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -151,6 +152,35 @@ fn canvas_command_result(state: State<AppState>, request_id: String, result: ser
     state.bus.resolve_canvas(&request_id, result);
 }
 
+/// The task board, for the human. The agents coordinate through this and until now it was invisible
+/// from the outside: you could watch two terminals scroll and still not know who had what.
+#[tauri::command]
+fn board_list(state: State<AppState>) -> Result<Vec<identra_mcp::tasks::Task>, String> {
+    identra_mcp::tasks::Board::open(&state.dir())?.list()
+}
+
+/// What the project has learned, newest first. Same argument as the board: memory that only agents
+/// can read is memory the user cannot check, correct, or trust.
+#[tauri::command]
+fn memory_list(state: State<AppState>, limit: Option<usize>) -> Result<Vec<Memory>, String> {
+    let dir = state.dir();
+    let store = identra_memory::Store::open(identra_mcp::server::memory_path(&dir))
+        .map_err(|e| e.to_string())?;
+    let scope = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "workspace".into());
+    store
+        .recent(
+            &identra_memory::Filter {
+                user_id: Some(scope),
+                ..Default::default()
+            },
+            limit.unwrap_or(50),
+        )
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn workspace_list() -> Result<Vec<WorkspaceMeta>, String> {
     let root = workspaces_root()?;
@@ -249,6 +279,8 @@ pub fn run() {
             canvas_load,
             canvas_save,
             canvas_command_result,
+            board_list,
+            memory_list,
             workspace_list,
             workspace_create,
             workspace_open

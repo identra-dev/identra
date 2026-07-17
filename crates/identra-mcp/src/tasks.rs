@@ -34,8 +34,10 @@ CREATE TABLE IF NOT EXISTS task_deps (
 );
 ";
 
-/// What an agent needs to decide whether to take a task.
-#[derive(Debug, PartialEq)]
+/// What an agent needs to decide whether to take a task. Serialized straight to the window too, so
+/// the human watching sees the same board their agents are working from.
+#[derive(Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Task {
     pub id: i64,
     pub description: String,

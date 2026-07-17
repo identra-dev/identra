@@ -400,3 +400,165 @@ body {
   line-height: 1.55;
   color: #8f8f8f;
 }
+
+/* Top left: which workspace, and the way into what the agents are doing. */
+.identra-topbar {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 5;
+}
+.identra-topbar__btn {
+  background: rgba(44, 44, 44, 0.86);
+  border: 1px solid var(--panel-edge);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+}
+.identra-topbar__btn:hover {
+  border-color: var(--yaru-orange);
+}
+.identra-topbar__btn[data-on="true"] {
+  background: var(--yaru-orange);
+  border-color: var(--yaru-orange);
+}
+
+/* The work panel. Docked right, over the canvas: you read it while watching the nodes, so it must
+   not push them around. */
+.identra-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 340px;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  background: rgba(44, 44, 44, 0.97);
+  border-left: 1px solid var(--panel-edge);
+  backdrop-filter: blur(10px);
+}
+.identra-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 10px 10px 12px;
+  border-bottom: 1px solid var(--panel-edge);
+}
+.identra-panel__tabs {
+  display: flex;
+  gap: 4px;
+}
+.identra-panel__tab {
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  padding: 5px 9px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: #9a9a9a;
+  cursor: pointer;
+}
+.identra-panel__tab[data-on="true"] {
+  background: var(--header);
+  color: var(--text);
+}
+/* The count is the point of the tab: it tells you there is something to look at. */
+.identra-panel__tab span {
+  margin-left: 5px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  background: var(--yaru-orange);
+  color: #fff;
+  font-size: 10px;
+}
+.identra-panel__close {
+  background: transparent;
+  border: 0;
+  color: #9a9a9a;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+}
+.identra-panel__close:hover {
+  color: var(--text);
+}
+.identra-panel__list {
+  list-style: none;
+  margin: 0;
+  padding: 10px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.identra-panel__empty,
+.identra-panel__error {
+  margin: 0;
+  padding: 16px 14px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #8f8f8f;
+}
+.identra-panel__error {
+  color: #f66151;
+}
+
+/* A task. The left edge carries the state, so the board is scannable without reading it. */
+.identra-task {
+  border: 1px solid var(--panel-edge);
+  border-left: 3px solid var(--state-missing);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: var(--bg);
+}
+.identra-task[data-state="open"] {
+  border-left-color: var(--yaru-orange);
+}
+.identra-task[data-state="claimed"] {
+  border-left-color: var(--state-running);
+}
+.identra-task[data-state="blocked"] {
+  border-left-color: var(--state-setup);
+}
+.identra-task[data-state="done"] {
+  opacity: 0.55;
+}
+.identra-task__top {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #8f8f8f;
+  margin-bottom: 4px;
+}
+.identra-task__what {
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.identra-task__meta {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #8f8f8f;
+}
+
+.identra-memory {
+  border: 1px solid var(--panel-edge);
+  border-left: 3px solid #6f8fd6;
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: var(--bg);
+  font-size: 12.5px;
+  line-height: 1.5;
+}

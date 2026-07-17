@@ -252,6 +252,17 @@ impl Store {
             .collect())
     }
 
+    /// The most recently learned memories in scope, newest first, capped at `limit`.
+    ///
+    /// Browsing, not searching. [`search`](Store::search) answers "what do we know about X" and
+    /// needs a question; this answers "what has been learned here", which is what someone reading
+    /// over their agents' shoulder actually wants, and there is no query to ask.
+    pub fn recent(&self, filter: &Filter, limit: usize) -> Result<Vec<Memory>, Error> {
+        let mut rows = self.scoped_rows(filter)?;
+        rows.sort_by_key(|r| std::cmp::Reverse(r.created_at));
+        Ok(rows.into_iter().take(limit).map(Row::into_memory).collect())
+    }
+
     /// Fetch one memory by id.
     pub fn get(&self, id: i64) -> Result<Option<Memory>, Error> {
         let row = self

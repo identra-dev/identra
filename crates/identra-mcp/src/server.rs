@@ -617,7 +617,10 @@ async fn call_tool(bus: &Bus, caller: &str, params: Option<&Value>) -> Value {
             let mut branch = None;
             if args.get("isolate").and_then(Value::as_bool) == Some(true) {
                 let slug = format!("{kind}-{}", &random_token()[..6]);
-                match worktree::isolate(&dir, &slug) {
+                let Some(base) = worktree::worktrees_root() else {
+                    return err_text("cannot find anywhere to put an isolated checkout");
+                };
+                match worktree::isolate(&dir, &slug, &base) {
                     Ok(out) => {
                         cwd = Some(out.path.display().to_string());
                         branch = Some(out.branch);

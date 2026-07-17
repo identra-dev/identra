@@ -19,6 +19,7 @@ import AgentNode, { type AgentNodeData } from "./AgentNode";
 import BrowserNode from "./BrowserNode";
 import NoteNode from "./NoteNode";
 import WorkspacePicker from "./WorkspacePicker";
+import WorkPanel from "./WorkPanel";
 import { AgentIcon } from "./icons";
 import {
   canvasCommandResult,
@@ -70,6 +71,7 @@ export default function App() {
   const [nodes, setNodes] = useState<FNode[]>([]);
   const [edges, setEdges] = useState<FEdge[]>([]);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const [panelOpen, setPanelOpen] = useState(false);
   const viewport = useRef<Viewport>({ x: 0, y: 0, zoom: 1 });
   // scheduleSave persists the whole canvas but each handler only has its own slice; these refs
   // hold the latest of both so a save always writes a consistent nodes+edges pair.
@@ -335,9 +337,21 @@ export default function App() {
         </div>
       )}
 
-      <div className="identra-workspace" title={workspace.path}>
-        {workspace.title}
+      <div className="identra-topbar">
+        <div className="identra-workspace" title={workspace.path}>
+          {workspace.title}
+        </div>
+        <button
+          className="identra-topbar__btn"
+          data-on={panelOpen}
+          onClick={() => setPanelOpen((v) => !v)}
+          title="What your agents are working on"
+        >
+          Work
+        </button>
       </div>
+
+      {panelOpen && <WorkPanel onClose={() => setPanelOpen(false)} />}
 
       <div className="identra-dock">
         {agents.map((a) => {

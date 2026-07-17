@@ -125,11 +125,15 @@ const CARRY: &[&str] = &[
     "package-lock.json",
 ];
 
-/// Give the agent working in `dir` its own checkout on a fresh branch.
+/// Give the agent working in `dir` its own checkout on a fresh branch, under `base`.
 ///
-/// `label` only shapes the branch and folder name, so two agents on the same task still get their
-/// own. `slug` is the caller's to make unique; I refuse rather than reuse a directory.
-pub fn isolate(dir: &Path, slug: &str) -> Result<Isolated, Error> {
+/// `base` is passed in rather than read from the environment here. That keeps this function a pure
+/// function of its arguments, which is what lets two of these run at once: an env var is process
+/// global, so a test (or a second window) setting it would change where the other one writes.
+/// [`worktrees_root`] is the caller's default.
+///
+/// `slug` is the caller's to make unique; I refuse rather than reuse a directory.
+pub fn isolate(dir: &Path, slug: &str, base: &Path) -> Result<Isolated, Error> {
     let root = repo_root(dir)?;
     if is_worktree(&root) {
         return Err(Error::AlreadyIsolated);
@@ -138,12 +142,11 @@ pub fn isolate(dir: &Path, slug: &str) -> Result<Isolated, Error> {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "repo".into());
-    let base = worktrees_root().ok_or_else(|| Error::NotARepo(dir.to_path_buf()))?;
     let path = base.join(&root_name).join(slug);
     if path.exists() {
         return Err(Error::Exists(path));
     }
-    std::fs::create_dir_all(path.parent().unwrap_or(&base))?;
+    std::fs::create_dir_all(path.parent().unwrap_or(base))?;
 
     let branch = format!("identra/{slug}");
     git(
@@ -302,9 +305,8 @@ mod tests {
         let dir = repo("isolate");
         let root = std::env::temp_dir().join(format!("identra-wtroot-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        std::env::set_var("IDENTRA_WORKTREES_ROOT", &root);
 
-        let out = isolate(&dir, "helper-1").expect("isolate a normal repo");
+        let out = isolate(&dir, "helper-1", &root).expect("isolate a normal repo");
         assert_eq!(out.branch, "identra/helper-1");
         assert!(
             out.path.join("README.md").is_file(),
@@ -327,11 +329,14 @@ mod tests {
 
         // A second agent asking for the same name is refused rather than handed the first one's
         // tree, which would be the exact collision this exists to prevent.
-        assert!(matches!(isolate(&dir, "helper-1"), Err(Error::Exists(_))));
+        assert!(matches!(
+            isolate(&dir, "helper-1", &root),
+            Err(Error::Exists(_))
+        ));
 
         // Refuse to nest. Isolating from inside a worktree gives a mess nobody meant to ask for.
         assert!(matches!(
-            isolate(&out.path, "helper-2"),
+            isolate(&out.path, "helper-2", &root),
             Err(Error::AlreadyIsolated)
         ));
 
@@ -348,7 +353,6 @@ mod tests {
         drop_worktree(&out.path).expect("clean up the worktree");
         assert!(!out.path.join("README.md").is_file());
 
-        std::env::remove_var("IDENTRA_WORKTREES_ROOT");
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -358,9 +362,8 @@ mod tests {
         let dir = repo("merge");
         let root = std::env::temp_dir().join(format!("identra-wtroot2-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        std::env::set_var("IDENTRA_WORKTREES_ROOT", &root);
 
-        let out = isolate(&dir, "worker").unwrap();
+        let out = isolate(&dir, "worker", &root).unwrap();
         std::fs::write(out.path.join("feature.txt"), "done\n").unwrap();
         for args in [
             vec!["add", "feature.txt"],
@@ -383,9 +386,11 @@ mod tests {
         let plain = std::env::temp_dir().join(format!("identra-plain-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&plain);
         std::fs::create_dir_all(&plain).unwrap();
-        assert!(matches!(isolate(&plain, "x"), Err(Error::NotARepo(_))));
+        assert!(matches!(
+            isolate(&plain, "x", &root),
+            Err(Error::NotARepo(_))
+        ));
 
-        std::env::remove_var("IDENTRA_WORKTREES_ROOT");
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&plain);

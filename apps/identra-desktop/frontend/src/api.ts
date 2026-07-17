@@ -86,6 +86,28 @@ export const canvasLoad = () => invoke<Canvas>("canvas_load");
 export const canvasSave = (canvas: Canvas) =>
   invoke<void>("canvas_save", { canvas });
 
+// The shared board the agents claim work from, and what the project has learned. Both are written
+// by agents through the bus; these read them so the human can see the same thing they do.
+export type Task = {
+  id: number;
+  description: string;
+  claimedBy: string | null;
+  done: boolean;
+  note: string | null;
+  blockedBy: number[];
+};
+
+export type Memory = {
+  id: number;
+  content: string;
+  created_at: number;
+};
+
+export const boardList = () => invoke<Task[]>("board_list");
+
+export const memoryList = (limit?: number) =>
+  invoke<Memory[]>("memory_list", { limit: limit ?? null });
+
 export const workspaceList = () => invoke<WorkspaceMeta[]>("workspace_list");
 
 // Creating a workspace makes the folder, writes a blank canvas into it, and makes it active. The

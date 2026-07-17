@@ -1533,6 +1533,7 @@ version = "0.1.0"
 dependencies = [
  "identra-core",
  "identra-mcp",
+ "identra-memory",
  "serde",
  "serde_json",
  "tauri",
