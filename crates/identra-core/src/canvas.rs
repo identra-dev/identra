@@ -49,7 +49,7 @@ impl Default for Viewport {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Canvas {
     #[serde(default)]
     pub nodes: Vec<Node>,
@@ -58,6 +58,27 @@ pub struct Canvas {
     pub edges: Vec<Edge>,
     #[serde(default)]
     pub viewport: Viewport,
+    /// The workspace's display name. The folder is the id, this is what the user reads and edits,
+    /// so it lives with the canvas rather than in a second metadata file.
+    #[serde(default = "default_title")]
+    pub title: String,
+}
+
+// I write Default by hand because the derived one would give an empty title, and a canvas with no
+// name is not a state I want anywhere: a blank board is still "untitled-workspace".
+impl Default for Canvas {
+    fn default() -> Self {
+        Canvas {
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            viewport: Viewport::default(),
+            title: default_title(),
+        }
+    }
+}
+
+fn default_title() -> String {
+    "untitled-workspace".into()
 }
 
 fn codex_kind() -> String {
@@ -126,9 +147,14 @@ mod tests {
                 y: 50.0,
                 zoom: 1.5,
             },
+            title: "Auth refactor".into(),
         };
         save(&dir, &canvas).unwrap();
         assert_eq!(load(&dir), canvas);
+
+        // A canvas.json written before `title` existed still loads, with the default name.
+        std::fs::write(canvas_path(&dir), r#"{"nodes":[],"edges":[]}"#).unwrap();
+        assert_eq!(load(&dir).title, "untitled-workspace");
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
