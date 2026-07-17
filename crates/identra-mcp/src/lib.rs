@@ -9,6 +9,9 @@
 //! testable against a fake, no live terminal or HTTP transport needed. `TerminalManager`
 //! satisfies `NodeIo`, so wiring the real bus is one blanket impl, not a rewrite.
 
+pub mod config;
+pub mod server;
+
 use identra_core::canvas::Edge;
 use identra_core::TerminalManager;
 
