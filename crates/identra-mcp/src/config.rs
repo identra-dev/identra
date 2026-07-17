@@ -205,9 +205,11 @@ depends on the work:
   file your peer owns, message them and ask, do not edit it yourself. This is the simpler option
   and it is enough when the split is clean.
 - **Isolate.** `add_terminal(isolate: true)` gives the helper its own checkout on its own branch,
-  so you can both edit the same files and neither of you loses work. Its branch merges back when it
-  is done. Reach for this the moment the work does not divide cleanly by file, rather than trying
-  to negotiate every shared file by message.
+  so you can both edit the same files and neither of you loses work. Reach for this the moment the
+  work does not divide cleanly by file, rather than trying to negotiate every shared file by
+  message. When the helper is done and you have looked at what it did, `land_work(nodeId)` merges
+  its branch onto yours and clears its checkout away. It refuses if the helper left work
+  uncommitted or the merge conflicts, so nothing lands behind your back.
 
 If you are working on an isolated branch, commit what you finish. Work you leave uncommitted does
 not merge, and nobody will notice it is missing until it is gone.

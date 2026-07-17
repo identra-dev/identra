@@ -487,6 +487,18 @@ fn tool_specs() -> Value {
                 },
                 "required": ["nodeIds"]
             }
+        },
+        {
+            "name": "land_work",
+            "description": "Merge an isolated helper's branch back onto your checkout and remove its worktree. Use this once a helper you gave its own checkout to (add_terminal with isolate) has finished and committed its work, and you have checked it. Only works on a helper you are wired to. It refuses if the helper has uncommitted changes or the merge conflicts, and leaves the checkout in place for you to sort out.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "nodeId": {"type": "string"},
+                    "squash": {"type": "boolean", "description": "Land the helper's commits as one. Defaults to true."}
+                },
+                "required": ["nodeId"]
+            }
         }
     ])
 }
@@ -736,6 +748,13 @@ async fn call_tool(bus: &Bus, caller: &str, params: Option<&Value>) -> Value {
             let id = arg_str("nodeId");
             ok_text(&describe_status(bus, &canvas, &id))
         }
+        "land_work" => {
+            // Squash by default: a helper's branch is often a scatter of small commits, and the
+            // spawner wants the change, not the helper's minute by minute history. An agent that
+            // wants those commits kept passes squash false.
+            let squash = args.get("squash").and_then(Value::as_bool).unwrap_or(true);
+            ok_text(&land_work(&canvas, caller, &arg_str("nodeId"), squash))
+        }
         "wait_for_nodes" => {
             let ids: Vec<String> = args
                 .get("nodeIds")
@@ -853,6 +872,55 @@ fn node_title(canvas: &canvas::Canvas, id: &str) -> String {
             }
         })
         .unwrap_or_else(|| id.to_string())
+}
+
+/// Where a node is running. For an isolated helper this is its worktree, which is what merge and
+/// drop need. `None` means the node is not on the canvas or was never given a directory.
+fn node_cwd(canvas: &canvas::Canvas, id: &str) -> Option<PathBuf> {
+    canvas
+        .nodes
+        .iter()
+        .find(|n| n.id == id)
+        .and_then(|n| n.cwd.as_deref())
+        .map(PathBuf::from)
+}
+
+/// Land an isolated helper's branch back on the checkout it came from, then remove its worktree.
+///
+/// Isolation was a one way door before this: an agent could hand a helper its own checkout and the
+/// helper could commit all day, and the work had nowhere to go. The engine had merge and drop the
+/// whole time, tested, with no way for an agent to reach them. This is that way.
+///
+/// Edge gated, and that is the right gate rather than an accident of reusing one. The wire from the
+/// helper to whoever spawned it is what makes this the spawner's work to land: a node you are not
+/// wired to is not yours to merge into the main checkout. I drop the worktree only after the merge
+/// reports success, so a merge that refuses (a dirty branch, a conflict) leaves the helper's
+/// checkout exactly where it was for the agent to sort out.
+fn land_work(canvas: &canvas::Canvas, caller: &str, target: &str, squash: bool) -> String {
+    if !list_peers(caller, &canvas.edges).contains(&target.to_string()) {
+        return "you can only land the work of a helper you are wired to".into();
+    }
+    let Some(path) = node_cwd(canvas, target) else {
+        return format!(
+            "{} is not running in a checkout of its own, so there is nothing to land",
+            node_title(canvas, target)
+        );
+    };
+    if let Err(e) = worktree::merge(&path, squash) {
+        return format!("did not land {}: {e}", node_title(canvas, target));
+    }
+    // The merge is in. A failure to remove the worktree now is untidy, not lost work, so I report it
+    // and still call the landing a success rather than making the agent think the merge did not take.
+    match worktree::drop_worktree(&path) {
+        Ok(()) => format!(
+            "landed {} and cleaned up its checkout",
+            node_title(canvas, target)
+        ),
+        Err(e) => format!(
+            "landed {}, but its checkout is still on disk ({e}), remove it by hand",
+            node_title(canvas, target)
+        ),
+    }
 }
 
 /// Put a message in the peer's queue, then tell them it is there.
@@ -1160,6 +1228,7 @@ mod tests {
                 "add_note",
                 "get_node_status",
                 "wait_for_nodes",
+                "land_work",
             ]
         );
 
@@ -1295,6 +1364,90 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Isolation used to be a one way door: a helper could commit in its own checkout and the work
+    /// had nowhere to go. This drives the whole round trip through the tool, so the door stays open.
+    #[test]
+    fn a_helpers_committed_work_lands_through_the_tool() {
+        let base = std::env::temp_dir().join(format!("identra-land-repo-{}", std::process::id()));
+        let wt_root = std::env::temp_dir().join(format!("identra-land-wt-{}", std::process::id()));
+        for p in [&base, &wt_root] {
+            let _ = std::fs::remove_dir_all(p);
+        }
+        let git = |dir: &std::path::Path, args: &[&str]| {
+            std::process::Command::new("git")
+                .current_dir(dir)
+                .args(args)
+                .output()
+                .unwrap();
+        };
+        std::fs::create_dir_all(&base).unwrap();
+        git(&base, &["init", "-q", "-b", "main"]);
+        git(&base, &["config", "user.email", "t@example.com"]);
+        git(&base, &["config", "user.name", "t"]);
+        std::fs::write(base.join("README.md"), "start\n").unwrap();
+        git(&base, &["add", "."]);
+        git(&base, &["commit", "-qm", "first"]);
+
+        // The helper gets its own checkout, does work there, and commits it on its branch.
+        let out = worktree::isolate(&base, "helper-1", &wt_root).unwrap();
+        std::fs::write(out.path.join("feature.rs"), "fn added() {}\n").unwrap();
+        git(&out.path, &["add", "."]);
+        git(&out.path, &["commit", "-qm", "the helper's work"]);
+
+        // The canvas the tool reads: a spawner wired to the helper, the helper running in its
+        // worktree. This is what isolation writes when it spawns a helper.
+        let canvas = Canvas {
+            nodes: vec![
+                Node {
+                    id: "spawner".into(),
+                    kind: "codex".into(),
+                    x: 0.0,
+                    y: 0.0,
+                    width: 480.0,
+                    height: 320.0,
+                    title: "spawner".into(),
+                    cwd: Some(base.display().to_string()),
+                },
+                Node {
+                    id: "helper".into(),
+                    kind: "codex".into(),
+                    x: 1.0,
+                    y: 1.0,
+                    width: 480.0,
+                    height: 320.0,
+                    title: "helper".into(),
+                    cwd: Some(out.path.display().to_string()),
+                },
+            ],
+            edges: vec![Edge {
+                id: "e".into(),
+                source: "spawner".into(),
+                target: "helper".into(),
+            }],
+            ..Canvas::default()
+        };
+
+        // A node the spawner is not wired to cannot be landed, whatever its cwd.
+        assert!(land_work(&canvas, "spawner", "stranger", true).contains("wired to"));
+
+        let landed = land_work(&canvas, "spawner", "helper", true);
+        assert!(landed.contains("landed"), "unexpected: {landed}");
+
+        // The helper's file is on main now, and its worktree is gone.
+        assert!(
+            base.join("feature.rs").is_file(),
+            "the helper's committed work reached the main checkout"
+        );
+        assert!(
+            !out.path.exists(),
+            "the worktree was cleaned up after landing"
+        );
+
+        for p in [&base, &wt_root] {
+            let _ = std::fs::remove_dir_all(p);
+        }
     }
 
     #[tokio::test]
