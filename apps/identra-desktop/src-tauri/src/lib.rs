@@ -80,14 +80,17 @@ fn terminal_start(
 
     // Put this node on the bus at launch, because every CLI reads its MCP servers once at startup.
     // The extra args carry the server (codex takes it inline, claude gets pointed at the workspace
-    // .mcp.json), and the env carries who this node is. The token never touches the frontend.
+    // .mcp.json), and the env carries this node's own secret, which is what the bus reads its
+    // identity from. Minting it here, per node, is what stops one agent claiming to be another; it
+    // goes into the child's env and never touches the frontend or the disk.
     let mut args = args;
     args.extend(identra_mcp::config::launch_args(
         &kind,
         state.mcp_port,
         &workspace,
     ));
-    let env = identra_mcp::config::launch_env(state.mcp_port, state.bus.token(), &id);
+    let token = state.bus.issue_token(&id);
+    let env = identra_mcp::config::launch_env(state.mcp_port, &token, &id);
 
     state
         .manager

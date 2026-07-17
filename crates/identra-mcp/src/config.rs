@@ -21,14 +21,15 @@ use std::path::Path;
 /// The MCP server name the agents see. Also the key in `.mcp.json` and the codex `-c` overrides.
 pub const BUS_NAME: &str = "identra-bus";
 
-/// Header carrying the per-launch secret. Every node sends the same value: it proves the caller is
-/// an agent Identra spawned, not some other process that found the port.
+/// Header carrying the caller's secret. Each node has its own, so this header both proves the
+/// caller is a node Identra launched and says which node it is. There is deliberately no header
+/// naming the node: an id an agent can type is an id an agent can forge.
 pub const TOKEN_HEADER: &str = "X-Identra-Token";
-/// Header carrying the calling node's id. This is who the bus thinks you are.
-pub const NODE_HEADER: &str = "X-Identra-Node";
 
 pub const PORT_ENV: &str = "IDENTRA_BUS_PORT";
 pub const TOKEN_ENV: &str = "IDENTRA_BUS_TOKEN";
+/// The node's own id, handed to it so it can name itself to peers. The bus never reads this back:
+/// it is a convenience for the agent, not a credential.
 pub const NODE_ENV: &str = "IDENTRA_BUS_NODE";
 
 fn mcp_json_path(workspace: &Path) -> std::path::PathBuf {
@@ -37,9 +38,9 @@ fn mcp_json_path(workspace: &Path) -> std::path::PathBuf {
 
 /// Write the workspace's `.mcp.json`. claude is pointed at this file with `--mcp-config`.
 ///
-/// The port is baked in because I know it when I write this, but the token and node id are left as
-/// `${VAR}` for claude to expand from the process env: they are the two things that differ per node
-/// and per launch, and the token must never sit on disk.
+/// The port is baked in because I know it when I write this. The token is left as `${VAR}` for
+/// claude to expand from the process env, which is what lets one file serve every node while each
+/// node still authenticates as itself, and keeps the secret off disk.
 pub fn write_mcp_json(workspace: &Path, port: u16) -> io::Result<()> {
     let body = format!(
         r#"{{
@@ -48,8 +49,7 @@ pub fn write_mcp_json(workspace: &Path, port: u16) -> io::Result<()> {
       "type": "http",
       "url": "http://127.0.0.1:{port}/mcp",
       "headers": {{
-        "{TOKEN_HEADER}": "${{{TOKEN_ENV}}}",
-        "{NODE_HEADER}": "${{{NODE_ENV}}}"
+        "{TOKEN_HEADER}": "${{{TOKEN_ENV}}}"
       }}
     }}
   }}
@@ -70,9 +70,11 @@ pub fn launch_args(kind: &str, port: u16, workspace: &Path) -> Vec<String> {
             format!(r#"mcp_servers.{BUS_NAME}.url="http://127.0.0.1:{port}/mcp""#),
             "-c".into(),
             format!(
-                r#"mcp_servers.{BUS_NAME}.env_http_headers={{"{TOKEN_HEADER}"="{TOKEN_ENV}","{NODE_HEADER}"="{NODE_ENV}"}}"#
+                r#"mcp_servers.{BUS_NAME}.env_http_headers={{"{TOKEN_HEADER}"="{TOKEN_ENV}"}}"#
             ),
         ],
+        // --mcp-config takes a list, so it has to stay last: anything after it that is not a flag
+        // would be swallowed as another config path.
         "claude" => vec![
             "--mcp-config".into(),
             mcp_json_path(workspace).display().to_string(),
@@ -81,8 +83,9 @@ pub fn launch_args(kind: &str, port: u16, workspace: &Path) -> Vec<String> {
     }
 }
 
-/// The env every agent node is launched with. `node_id` is what the bus reads back as the caller,
-/// so each node gets its own and cannot claim to be a peer.
+/// The env every agent node is launched with. `token` is this node's own secret and is the only
+/// thing the bus reads its identity from, so mint a fresh one per node. `node_id` is passed for the
+/// agent's own benefit and carries no authority.
 pub fn launch_env(port: u16, token: &str, node_id: &str) -> Vec<(String, String)> {
     vec![
         (PORT_ENV.into(), port.to_string()),
@@ -150,11 +153,13 @@ mod tests {
         write_mcp_json(&dir, 8900).unwrap();
         let body = std::fs::read_to_string(dir.join(".mcp.json")).unwrap();
 
-        // The port is known now, so it is baked. The token and node are not, so they stay as env
-        // expansions: that is what lets one file serve every node and keeps the secret off disk.
+        // The port is known now, so it is baked. The token is not, so it stays an env expansion:
+        // that is what lets one file serve every node while each authenticates as itself.
         assert!(body.contains("http://127.0.0.1:8900/mcp"));
         assert!(body.contains(r#""X-Identra-Token": "${IDENTRA_BUS_TOKEN}""#));
-        assert!(body.contains(r#""X-Identra-Node": "${IDENTRA_BUS_NODE}""#));
+        // No header names the node. An id the agent supplies is an id the agent can forge, so the
+        // token has to be the only thing the bus trusts.
+        assert!(!body.contains("X-Identra-Node"));
         // It has to be valid json or claude will not read it.
         let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(parsed["mcpServers"]["identra-bus"]["type"], "http");
@@ -170,8 +175,11 @@ mod tests {
         let codex = launch_args("codex", 8900, ws);
         assert_eq!(codex[0], "-c");
         assert!(codex[1].contains(r#"mcp_servers.identra-bus.url="http://127.0.0.1:8900/mcp""#));
-        assert!(codex[3].contains("env_http_headers"));
-        assert!(codex[3].contains(r#""X-Identra-Node"="IDENTRA_BUS_NODE""#));
+        assert!(codex[3].contains(r#""X-Identra-Token"="IDENTRA_BUS_TOKEN""#));
+        assert!(
+            !codex[3].contains("X-Identra-Node"),
+            "the node id is never a header"
+        );
 
         // claude just gets pointed at the workspace file.
         assert_eq!(

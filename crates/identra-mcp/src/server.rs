@@ -7,14 +7,21 @@
 //! codex sends. No SSE, no session state. That is far less surface than wiring a full MCP SDK for
 //! three tools, and every byte on the wire is under test.
 //!
-//! Identity is two headers, never a tool argument, and neither is written by the agent: Identra
-//! sets `IDENTRA_BUS_TOKEN` and `IDENTRA_BUS_NODE` on each node's process and the CLI expands them
-//! into headers itself. The token is one secret per launch, so only agents Identra started can talk
-//! to the bus at all; the node header says which node is calling. Headers are what every one of
-//! these CLIs can source from the environment, which is the only way one config serves every node.
-//! The edge on the canvas is the second gate: even a valid caller only reads or messages nodes it
-//! is wired to.
+//! Identity is one header and it is a secret, not a name. Identra mints a token per node, sets it
+//! as `IDENTRA_BUS_TOKEN` on that node's process, and the CLI expands it into a header itself. The
+//! bus maps the token back to the node id, so who you are is something you prove, not something you
+//! claim.
+//!
+//! I do not take the caller's node id from a header or a tool argument, and this is the whole point.
+//! An agent has a shell: if the id were self-asserted, any node could curl this port claiming to be
+//! a peer, read that peer's context, and send messages under its name. A per-node secret cannot be
+//! forged that way, because a node only ever holds its own.
+//!
+//! An env-sourced header is also the only mechanism every one of these CLIs shares, so one config
+//! serves every node while the value still differs per node. The edge on the canvas is the second
+//! gate: even a proven caller only reads or messages nodes it is wired to.
 
+use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -43,7 +50,8 @@ use crate::{config, get_peer_context, list_peers, send_to_node, BusError};
 pub struct Bus {
     manager: Arc<TerminalManager>,
     project_dir: Arc<Mutex<PathBuf>>,
-    token: String,
+    /// Secret to node id. The map is the identity: holding a token is the only way to be that node.
+    tokens: Mutex<HashMap<String, String>>,
 }
 
 impl Bus {
@@ -51,16 +59,27 @@ impl Bus {
         Self {
             manager,
             project_dir,
-            // One secret per launch, shared by every node. It is not what tells nodes apart (the
-            // node header does that); it is what stops a process that merely found the port from
-            // talking to the bus at all.
-            token: random_token(),
+            tokens: Mutex::new(HashMap::new()),
         }
     }
 
-    /// The per-launch secret. Goes into each agent process's env, never onto disk.
-    pub fn token(&self) -> &str {
-        &self.token
+    /// Mint this node's own secret and remember which node it names. Call it right before the
+    /// node's CLI launches and put the result in that process's env, nowhere else: it is the one
+    /// thing separating "I am node b" from "I say I am node b".
+    ///
+    /// A relaunched node gets a fresh token and the old one stays mapped. That is harmless, the old
+    /// token names the same node, and it saves tracking which of a node's launches is current.
+    pub fn issue_token(&self, node_id: &str) -> String {
+        let token = random_token();
+        self.tokens
+            .lock()
+            .unwrap()
+            .insert(token.clone(), node_id.to_string());
+        token
+    }
+
+    fn node_for(&self, token: &str) -> Option<String> {
+        self.tokens.lock().unwrap().get(token).cloned()
     }
 }
 
@@ -107,14 +126,9 @@ async fn handle(
     if !peer.ip().is_loopback() {
         return StatusCode::FORBIDDEN.into_response();
     }
-    // Two headers, both sourced from the node's env by the CLI itself: the launch secret proves
-    // this is an agent Identra started, and the node id says which one. I compare the secret in
-    // constant time so a wrong guess leaks nothing through timing.
-    let presented = header(&headers, config::TOKEN_HEADER).unwrap_or_default();
-    if !constant_time_eq(presented.as_bytes(), bus.token.as_bytes()) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    let Some(caller) = header(&headers, config::NODE_HEADER).filter(|n| !n.is_empty()) else {
+    // The token is the identity: it names the caller, so there is nothing here for a node to lie
+    // about. An unknown token is not a node I launched, so it gets nothing.
+    let Some(caller) = header(&headers, config::TOKEN_HEADER).and_then(|t| bus.node_for(&t)) else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
 
@@ -271,19 +285,6 @@ fn header(headers: &HeaderMap, name: &str) -> Option<String> {
     headers.get(name)?.to_str().ok().map(str::to_string)
 }
 
-/// Compare without an early exit, so how far a wrong token matched is not observable in the timing.
-/// Sixteen bytes of hex is small enough that a hand-rolled loop beats pulling in a crate for it.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b) {
-        diff |= x ^ y;
-    }
-    diff == 0
-}
-
 /// 16 bytes of `/dev/urandom`, hex encoded. That source is always present on the Linux and macOS
 /// targets Identra ships to; the fallback only keeps a failed read from minting an all-zero token,
 /// it is not a strong secret.
@@ -314,30 +315,26 @@ mod tests {
     }
 
     #[test]
-    fn each_launch_mints_its_own_secret_and_compares_it_safely() {
-        let a = bus_in(std::env::temp_dir());
-        let b = bus_in(std::env::temp_dir());
-        assert_ne!(
-            a.token(),
-            b.token(),
-            "a secret is per launch, not a constant"
-        );
-        assert_eq!(a.token().len(), 32, "16 random bytes, hex encoded");
+    fn a_token_names_exactly_one_node_and_nothing_else_does() {
+        let bus = bus_in(std::env::temp_dir());
+        let a = bus.issue_token("node-a");
+        let b = bus.issue_token("node-b");
 
-        assert!(constant_time_eq(a.token().as_bytes(), a.token().as_bytes()));
-        assert!(!constant_time_eq(
-            a.token().as_bytes(),
-            b.token().as_bytes()
-        ));
-        assert!(!constant_time_eq(b"short", b"longer"));
+        assert_eq!(bus.node_for(&a).as_deref(), Some("node-a"));
+        assert_eq!(bus.node_for(&b).as_deref(), Some("node-b"));
+        // Node a holds only its own secret, so it has nothing it could present to become node b.
+        // That is the whole impersonation defence: identity is proven, never asserted.
+        assert_ne!(a, b);
+        assert_eq!(bus.node_for("not-a-token"), None);
+        assert_eq!(a.len(), 32, "16 random bytes, hex encoded");
 
         let mut headers = HeaderMap::new();
-        headers.insert(config::NODE_HEADER, "node-a".parse().unwrap());
+        headers.insert(config::TOKEN_HEADER, a.parse().unwrap());
         assert_eq!(
-            header(&headers, config::NODE_HEADER).as_deref(),
-            Some("node-a")
+            header(&headers, config::TOKEN_HEADER).as_deref(),
+            Some(a.as_str())
         );
-        assert_eq!(header(&HeaderMap::new(), config::NODE_HEADER), None);
+        assert_eq!(header(&HeaderMap::new(), config::TOKEN_HEADER), None);
     }
 
     #[test]

@@ -1,10 +1,11 @@
 //! The bus over real HTTP, spoken the way an agent CLI speaks it.
 //!
 //! The unit tests cover the dispatch and the edge gate directly. What they cannot show is that the
-//! whole path works: a socket, the two identity headers a CLI expands from its env, the JSON-RPC
+//! whole path works: a socket, the identity header a CLI expands from its env, the JSON-RPC
 //! envelope, and a tool result coming back. That path is the entire claim ("two agents can share
 //! context"), so I drive it here with a hand-written request rather than trusting the layers to
-//! line up.
+//! line up. Writing the request by hand is also what lets me forge one: a real client would never
+//! send someone else's id, which is exactly the case worth testing.
 //!
 //! I write the request by hand instead of pulling in an HTTP client for one test. `Connection:
 //! close` makes the server hang up when it is done, so reading to EOF is the whole response and I
@@ -19,14 +20,13 @@ use identra_core::canvas::{self, Canvas, Edge, Node};
 use identra_core::TerminalManager;
 use identra_mcp::server::{bind, serve, Bus};
 
-fn post(port: u16, token: &str, node: &str, body: &str) -> String {
+fn post(port: u16, token: &str, body: &str) -> String {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("bus is listening");
     let req = format!(
         "POST /mcp HTTP/1.1\r\n\
          Host: 127.0.0.1\r\n\
          Content-Type: application/json\r\n\
          X-Identra-Token: {token}\r\n\
-         X-Identra-Node: {node}\r\n\
          Content-Length: {len}\r\n\
          Connection: close\r\n\r\n{body}",
         len = body.len()
@@ -73,7 +73,9 @@ fn an_agent_reaches_the_bus_and_sees_only_the_peer_it_is_wired_to() {
 
     let manager = Arc::new(TerminalManager::new(Arc::new(|_id, _out| {})));
     let bus = Arc::new(Bus::new(manager, Arc::new(Mutex::new(dir.clone()))));
-    let token = bus.token().to_string();
+    // Each node is launched with its own secret. That is the only thing that says who it is.
+    let token = bus.issue_token("a");
+    let token_c = bus.issue_token("c");
     let (listener, port) = bind().expect("bind the bus");
 
     let serving = bus.clone();
@@ -97,7 +99,6 @@ fn an_agent_reaches_the_bus_and_sees_only_the_peer_it_is_wired_to() {
     let init = post(
         port,
         &token,
-        "a",
         r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}"#,
     );
     assert!(init.starts_with("HTTP/1.1 200"), "init failed: {init}");
@@ -108,7 +109,6 @@ fn an_agent_reaches_the_bus_and_sees_only_the_peer_it_is_wired_to() {
     let tools = post(
         port,
         &token,
-        "a",
         r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
     );
     for tool in ["list_peers", "get_peer_context", "send_to_node"] {
@@ -119,7 +119,6 @@ fn an_agent_reaches_the_bus_and_sees_only_the_peer_it_is_wired_to() {
     let peers = post(
         port,
         &token,
-        "a",
         r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_peers"}}"#,
     );
     assert!(peers.contains("Tests"), "a should see its peer b: {peers}");
@@ -128,21 +127,39 @@ fn an_agent_reaches_the_bus_and_sees_only_the_peer_it_is_wired_to() {
         "an unwired node must stay invisible"
     );
 
-    // Same request from the node with no edges: a valid agent, no peers.
+    // c's own secret names c, which has no edges: a valid agent, no peers. c cannot borrow a's view
+    // by asking nicely, because the request carries no node id to ask with.
     let alone = post(
         port,
-        &token,
-        "c",
+        &token_c,
         r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"list_peers"}}"#,
     );
     assert!(alone.contains("no wired peers"));
 
-    // A process that found the port but has no launch secret gets nothing.
+    // Impersonation: c presents its real secret but names itself "a" every way the wire allows, in
+    // a header and in the tool arguments. Neither is read, so c stays c and never sees a's peer.
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    let body = r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"list_peers","arguments":{"nodeId":"a","caller":"a"}}}"#;
+    let req = format!(
+        "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\
+         X-Identra-Token: {token_c}\r\nX-Identra-Node: a\r\nContent-Length: {}\r\n\
+         Connection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(req.as_bytes()).expect("write");
+    let mut spoofed = String::new();
+    stream.read_to_string(&mut spoofed).expect("read");
+    assert!(
+        spoofed.contains("no wired peers"),
+        "a forged node id must not grant a's view: {spoofed}"
+    );
+    assert!(!spoofed.contains("Tests"), "impersonation leaked a's peer");
+
+    // A process that found the port but holds no secret at all gets nothing.
     let forged = post(
         port,
         "not-the-token",
-        "a",
-        r#"{"jsonrpc":"2.0","id":5,"method":"tools/list"}"#,
+        r#"{"jsonrpc":"2.0","id":6,"method":"tools/list"}"#,
     );
     assert!(forged.starts_with("HTTP/1.1 401"), "expected 401: {forged}");
 
