@@ -901,11 +901,7 @@ fn now() -> i64 {
 
 /// The workspace folder name is the project's identity for memory. I use it rather than the full
 /// path so a workspace that gets moved keeps what it learned.
-///
-/// Public because anything writing memories a node will later read has to scope them the same way
-/// the bus does, and the demo seeder does exactly that. A second copy of this rule somewhere else
-/// would drift, and the symptom of the drift is memories that are silently unreachable.
-pub fn memory_scope(project_dir: &std::path::Path, caller: &str) -> memory::Scope {
+fn memory_scope(project_dir: &std::path::Path, caller: &str) -> memory::Scope {
     memory::Scope {
         user_id: project_dir
             .file_name()
