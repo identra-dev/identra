@@ -15,8 +15,16 @@ build:
 
 # run the whole test suite
 test:
-    cargo test --workspace
+    # No model in the tests. A workspace build turns the embedding feature on for every crate,
+    # because the app asks for it, and a suite that downloads 130MB is a suite that fails on a
+    # train. Word matching is the path this exercises, and it is a real path: it is what someone
+    # offline gets. Meaning based ranking is checked by hand with the recall-check recipe.
+    IDENTRA_EMBEDDINGS=off cargo test --workspace
     cd apps/identra-desktop/frontend && bun test
+
+# See recall work against the real model. Fetches it on the first run, then works offline.
+recall-check:
+    cargo run -p identra-memory --features fastembed --example recall_check
 
 # format rust and web
 fmt:

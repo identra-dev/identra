@@ -6,5 +6,19 @@ license = "Apache-2.0"
 description = "Identra's memory layer: add/search/get/delete over a local SQLite store with pluggable embeddings."
 
 [dependencies]
+# Text embeddings, off unless asked for. default-features pulls image-models (and the jpeg and
+# video codecs behind it) plus a native-tls ONNX download, none of which a text memory store has
+# any use for. rustls rather than native-tls because the Mac build is a universal binary and
+# cross compiling OpenSSL for two arches is a fight with nothing at the end of it.
+fastembed = { version = "5.17.3", optional = true, default-features = false, features = [
+    "hf-hub-rustls-tls",
+    "ort-download-binaries-rustls-tls",
+] }
+dirs = { version = "6", optional = true }
 rusqlite = { version = "0.40.1", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
+
+[features]
+# Off by default so the crate's own tests stay offline and quick: they cover the store, and the
+# store's behaviour does not depend on which embedder is plugged in. The app turns this on.
+fastembed = ["dep:fastembed", "dep:dirs"]

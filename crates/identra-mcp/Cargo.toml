@@ -14,5 +14,12 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 tokio = { version = "1.52.4", features = ["net", "rt", "sync", "time"] }
 
+[features]
+# The app turns this on and ships with the model. It is off here so `cargo test` stays offline:
+# these tests cover tool dispatch and the store, neither of which changes with an embedder plugged
+# in, and the path they exercise without one is the real path a user offline gets. Meaning based
+# ranking is proven in identra-memory's own example against the actual model.
+fastembed = ["identra-memory/fastembed"]
+
 [dev-dependencies]
 tokio = { version = "1.52.4", features = ["rt-multi-thread", "macros", "time"] }

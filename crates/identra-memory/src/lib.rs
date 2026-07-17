@@ -14,9 +14,15 @@
 
 use std::fmt;
 use std::path::Path;
+use std::sync::Arc;
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+
+#[cfg(feature = "fastembed")]
+mod local_embedder;
+#[cfg(feature = "fastembed")]
+pub use local_embedder::LocalEmbedder;
 
 /// Who a memory belongs to. All three fields are required on a write. [`Filter`] makes them
 /// optional on a read.
@@ -117,6 +123,10 @@ impl Extractor for Verbatim {
 #[derive(Debug)]
 pub enum Error {
     Db(rusqlite::Error),
+    /// The embedding model could not be loaded. Recall still works, on words rather than meaning,
+    /// so this is a downgrade to report and not a reason to fail a caller who only wanted to write
+    /// a memory down.
+    Model(String),
 }
 
 impl From<rusqlite::Error> for Error {
@@ -129,6 +139,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::Db(e) => write!(f, "db error: {e}"),
+            Error::Model(e) => write!(f, "embedding model unavailable: {e}"),
         }
     }
 }
@@ -139,7 +150,9 @@ impl std::error::Error for Error {}
 /// `Mutex` is needed here; a caller that shares the store across threads wraps the whole `Store`.
 pub struct Store {
     conn: Connection,
-    embedder: Option<Box<dyn Embedder>>,
+    /// Shared rather than owned, because loading a model costs a second and a store is opened per
+    /// call. One model, many stores.
+    embedder: Option<Arc<dyn Embedder>>,
     extractor: Box<dyn Extractor>,
 }
 
@@ -163,10 +176,41 @@ impl Store {
         })
     }
 
-    /// Attach an embedder, so `search` ranks by cosine similarity instead of substring.
-    pub fn with_embedder(mut self, embedder: Box<dyn Embedder>) -> Self {
+    /// Attach an embedder, so `search` ranks by cosine similarity instead of substring, and give
+    /// any row that predates it a vector.
+    ///
+    /// The backfill is the whole reason this returns a Result. A cosine search can only rank rows
+    /// it has a vector for, so a memory written while no embedder was set is not merely ranked
+    /// badly, it is unreachable, and it stays unreachable forever while looking perfectly healthy
+    /// in the work panel. That happens on the ordinary path: someone runs offline before the model
+    /// is fetched, writes down three decisions, and later cannot find them. Embedding on the way in
+    /// keeps the rule simple, every row in a store with an embedder has a vector, and the rule is
+    /// what makes the search honest.
+    pub fn with_embedder(mut self, embedder: Arc<dyn Embedder>) -> Result<Self, Error> {
         self.embedder = Some(embedder);
-        self
+        self.backfill_vectors()?;
+        Ok(self)
+    }
+
+    /// Embed every row that has no vector. Cheap and idempotent after the first pass, since it only
+    /// looks at rows where the column is null.
+    fn backfill_vectors(&self) -> Result<(), Error> {
+        let Some(embedder) = self.embedder.as_ref() else {
+            return Ok(());
+        };
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, content FROM memories WHERE embedding IS NULL")?;
+        let pending: Vec<(i64, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        for (id, content) in pending {
+            self.conn.execute(
+                "UPDATE memories SET embedding = ?1 WHERE id = ?2",
+                params![pack(&embedder.embed(&content)), id],
+            )?;
+        }
+        Ok(())
     }
 
     /// Replace the default verbatim extractor with a model backed one.
@@ -585,7 +629,8 @@ mod tests {
     fn semantic_search_ranks_by_cosine() {
         let store = Store::open_in_memory()
             .unwrap()
-            .with_embedder(Box::new(KeywordEmbedder));
+            .with_embedder(Arc::new(KeywordEmbedder))
+            .unwrap();
         store.add(&scope("r1"), "the rust build is slow").unwrap();
         store
             .add(&scope("r1"), "python typing is optional")
@@ -595,6 +640,27 @@ mod tests {
             .search(&Filter::default(), "rust toolchain", 2)
             .unwrap();
         assert_eq!(hits[0].content, "the rust build is slow");
+    }
+
+    /// A memory written before there was an embedder must not become unreachable once there is
+    /// one. Cosine can only rank a row it has a vector for, so without the backfill this fact is
+    /// silently invisible to every future search while still sitting in the work panel looking
+    /// fine. That is the shape of the bug I care most about here: not a wrong answer, a confident
+    /// empty one.
+    #[test]
+    fn a_fact_learned_before_the_model_is_still_findable_after_it() {
+        let store = Store::open_in_memory().unwrap();
+        store.add(&scope("r1"), "the rust build is slow").unwrap();
+
+        let store = store.with_embedder(Arc::new(KeywordEmbedder)).unwrap();
+        let hits = store
+            .search(&Filter::default(), "rust toolchain", 2)
+            .unwrap();
+        assert_eq!(
+            hits.first().map(|m| m.content.as_str()),
+            Some("the rust build is slow"),
+            "a row written before the embedder was attached is still searchable"
+        );
     }
 
     #[test]

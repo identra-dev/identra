@@ -72,6 +72,47 @@ const RECALL_LIMIT: usize = 10;
 /// than a personal project accumulates in a week.
 const BROWSE_LIMIT: usize = 50;
 
+/// The embedding model, loaded at most once for the life of the process.
+///
+/// Opening a store is cheap and I do it per call, but loading a model is not: it is a second of
+/// CPU and, the very first time, a download. So the store is per call and the model is per process,
+/// which is the only reason `Store` takes an `Arc` here rather than owning its embedder.
+///
+/// A failure is a downgrade, not an error. No model means recall matches on words, which is worse
+/// but works, and it is what someone offline gets. I cache the failure too: if the model is not
+/// coming, retrying it on every single memory call would freeze the agent's turn over and over for
+/// the same answer.
+#[cfg(feature = "fastembed")]
+fn shared_embedder() -> Option<std::sync::Arc<dyn memory::Embedder>> {
+    use std::sync::OnceLock;
+    static MODEL: OnceLock<Option<std::sync::Arc<memory::LocalEmbedder>>> = OnceLock::new();
+    MODEL
+        .get_or_init(|| {
+            // The one thing in Identra that reaches the network, so it gets a way to say no. Set
+            // IDENTRA_EMBEDDINGS=off and recall matches on words and nothing is ever fetched. Our
+            // own tests set it, since a suite that pulls 130MB from a model host fails for reasons
+            // that have nothing to do with the code, and a workspace build turns this feature on for
+            // every crate whether it wanted it or not.
+            if std::env::var("IDENTRA_EMBEDDINGS").is_ok_and(|v| v == "off") {
+                return None;
+            }
+            match memory::LocalEmbedder::new() {
+                Ok(model) => Some(std::sync::Arc::new(model)),
+                Err(e) => {
+                    eprintln!("identra: recall is matching on words, not meaning: {e}");
+                    None
+                }
+            }
+        })
+        .clone()
+        .map(|m| m as std::sync::Arc<dyn memory::Embedder>)
+}
+
+#[cfg(not(feature = "fastembed"))]
+fn shared_embedder() -> Option<std::sync::Arc<dyn memory::Embedder>> {
+    None
+}
+
 /// Open the workspace's memory, creating `.identra/` on the first write.
 ///
 /// I open per call rather than holding a connection on the bus: `Connection` is not `Sync`, these
@@ -82,7 +123,11 @@ fn open_memory(project_dir: &std::path::Path) -> Result<memory::Store, String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
-    memory::Store::open(path).map_err(|e| e.to_string())
+    let store = memory::Store::open(path).map_err(|e| e.to_string())?;
+    match shared_embedder() {
+        Some(model) => store.with_embedder(model).map_err(|e| e.to_string()),
+        None => Ok(store),
+    }
 }
 
 /// A canvas mutation an agent asked for, on its way to the window that owns the canvas.
@@ -856,7 +901,11 @@ fn now() -> i64 {
 
 /// The workspace folder name is the project's identity for memory. I use it rather than the full
 /// path so a workspace that gets moved keeps what it learned.
-fn memory_scope(project_dir: &std::path::Path, caller: &str) -> memory::Scope {
+///
+/// Public because anything writing memories a node will later read has to scope them the same way
+/// the bus does, and the demo seeder does exactly that. A second copy of this rule somewhere else
+/// would drift, and the symptom of the drift is memories that are silently unreachable.
+pub fn memory_scope(project_dir: &std::path::Path, caller: &str) -> memory::Scope {
     memory::Scope {
         user_id: project_dir
             .file_name()
@@ -921,20 +970,35 @@ fn recall(project_dir: &std::path::Path, query: &str, limit: usize) -> Result<St
         .search(&filter, query, limit)
         .map_err(|e| e.to_string())?;
     if hits.is_empty() {
-        // A miss here means the query shared no words with any fact, which is not the same as the
-        // project knowing nothing. Saying "nothing remembered" would be a lie the agent acts on, by
-        // asking the user something it was already told. I hand back the recent facts and say what
-        // happened, so a bad guess degrades to browsing instead of to amnesia.
+        // Only the word matching path reaches this, and a miss there means the query shared no word
+        // with any fact, which is not the same as the project knowing nothing. Saying "nothing
+        // remembered" would be a lie the agent acts on, by asking the user something it was already
+        // told. I hand back the recent facts instead, so a bad guess degrades to browsing rather
+        // than to amnesia.
         let held = store.recent(&filter, limit).map_err(|e| e.to_string())?;
         if held.is_empty() {
             return Ok("this project has not learned anything yet".into());
         }
         return Ok(format!(
-            "no fact matched those words. what this project does know, newest first:\n{}",
+            "nothing worded like that. what this project does know, newest first, judge for \
+             yourself whether any of it bears on your question:\n{}",
             bullets(&held)
         ));
     }
-    Ok(bullets(&hits))
+    // Deliberately not "here is your answer". With a model attached this ranks every fact it holds
+    // and returns the top few, so it always returns something, and that something is only ever "the
+    // closest I have". I measured whether the score could tell a real answer from a question about
+    // a topic this project has never touched, and it cannot: the ranges overlap (the numbers are in
+    // local_embedder.rs), so a cutoff would drop true answers to keep out junk. The ordering is the
+    // part this model is good at. The reader is also a model, and it can see perfectly well that a
+    // fact about JWTs does not answer a question about kubernetes, so I rank honestly and say what
+    // these are. What I will not do is dress the nearest row up as the answer, because an agent that
+    // believes that acts on it.
+    Ok(format!(
+        "the closest this project has to that, nearest first. judge for yourself whether it \
+         answers your question:\n{}",
+        bullets(&hits)
+    ))
 }
 
 fn bullets(memories: &[memory::Memory]) -> String {
@@ -1152,15 +1216,17 @@ mod tests {
             .unwrap()
             .contains("already remembered"));
 
-        // A query that matches nothing still hands back what is held. Matching is on words, so a
-        // miss means the agent guessed the wording wrong, and answering "nothing remembered" would
-        // send it to the user to ask about a decision this project has already made.
+        // A query about something this project never discussed still hands back what it does hold.
+        // I assert the guarantee and not the wording, because the two recall paths word it
+        // differently and both honour it: word matching misses and falls back to the recent facts,
+        // a model ranks this fact nearest for want of anything closer. What must never happen on
+        // either path is an agent being told there is nothing, then asking the user to re-decide
+        // something already settled.
         let miss = find(&bus, "node-a", "kubernetes").await;
         let text = miss["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("no fact matched those words"), "{text}");
         assert!(
             text.contains("postgres listen/notify"),
-            "a bad guess degrades to browsing, never to amnesia: {text}"
+            "a query that hits nothing still shows what is known, never amnesia: {text}"
         );
 
         // Empty text is a caller mistake, and silently storing it would poison recall.

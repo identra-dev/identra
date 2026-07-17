@@ -9,16 +9,16 @@ together, and Identra keeps a memory of what happened so the next agent you open
 knows the project.
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Linux-E95420.svg)](#requirements)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-E95420.svg)](#requirements)
 [![Stack](https://img.shields.io/badge/stack-Rust%20%2B%20Tauri%20%2B%20React-24C8DB.svg)](#how-it-works)
 [![Status](https://img.shields.io/badge/status-early-orange.svg)](#status)
 
+[Download and run](#download-and-run) &nbsp;·&nbsp;
 [Why](#why-i-built-this) &nbsp;·&nbsp;
 [What it does](#what-it-does) &nbsp;·&nbsp;
 [Requirements](#requirements) &nbsp;·&nbsp;
-[Quick start](#quick-start) &nbsp;·&nbsp;
+[Build from source](#build-from-source) &nbsp;·&nbsp;
 [How it works](#how-it-works) &nbsp;·&nbsp;
-[Tasks](#tasks) &nbsp;·&nbsp;
 [Status](#status)
 
 </div>
@@ -26,6 +26,42 @@ knows the project.
 Rust engine, Tauri shell, React canvas. Apache-2.0.
 
 ---
+
+## Download and run
+
+Grab a build from [Releases](https://github.com/identra-dev/identra/releases). Nothing to
+compile.
+
+**Linux**
+
+```bash
+chmod +x Identra_0.1.0_amd64.AppImage
+./Identra_0.1.0_amd64.AppImage
+```
+
+There is a `.deb` and an `.rpm` there too if you would rather install it properly.
+
+**macOS**
+
+Open the `.dmg` and drag Identra to Applications. It is not notarized yet, so the first launch
+needs one of these, or macOS will tell you it cannot check the app for malicious software:
+
+```bash
+xattr -cr /Applications/Identra.app
+```
+
+Or right click the app and choose Open, which gives you the same dialog with an Open button on
+it.
+
+**One thing to install first.** Identra runs coding agents, it does not include one. Put
+[codex](https://github.com/openai/codex) on your PATH and sign in:
+
+```bash
+codex --version   # if this works, Identra can run it
+```
+
+Without it a node still opens. It tells you the binary is missing rather than pretending to
+work, but you will not see an agent run.
 
 ## Why i built this
 
@@ -56,25 +92,29 @@ part of my desktop, not a browser tab pretending to be an app.
 
 ## Requirements
 
-Identra is a Linux desktop app (it renders through webkitgtk). You need:
+**To run a release build:** `codex` on your PATH, and nothing else. Linux or macOS.
+
+Windows is not supported yet. It is not a small port: interactive agent TUIs need ConPTY, the
+paths differ, and WebView2 wants its own testing. It is on the list, it is not this month.
+
+**To build from source, you also need:**
 
 - Rust and Cargo (`rustup` is the easy way)
 - The Tauri CLI: `cargo install tauri-cli`
 - [bun](https://bun.sh) for the web side
 - [just](https://github.com/casey/just) for the tasks below
-- webkitgtk and its build deps. On Debian/Ubuntu:
+- On Linux, webkitgtk and its build deps. On Debian and Ubuntu:
 
   ```bash
   sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
     libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
   ```
 
-- `codex` on your PATH if you want an agent node to actually run something. Without it, a node
-  still opens, it just tells you the binary is missing instead of pretending to work.
+  macOS renders through WKWebView, which is already there, so there is nothing to install.
 
 Run `just doctor` and it will tell you what you are missing.
 
-## Quick start
+## Build from source
 
 ```bash
 git clone https://github.com/identra-dev/identra.git
@@ -85,6 +125,10 @@ just dev         # build and launch with hot reload
 
 First launch builds the Rust side, so give it a minute. After that, right-click the canvas or
 use the dock to add a Codex node, and start typing.
+
+`just build` produces the release bundles for whatever OS you are on. Run it from
+`apps/identra-desktop` if you call `cargo tauri build` yourself: the frontend build script it
+shells out to lives there, not at the repo root.
 
 ## How it works
 
@@ -116,10 +160,22 @@ index. If you have no model configured, it stores the raw text instead of guessi
 degrades quietly, it never blocks your work and it never calls out to a server you did not ask
 it to.
 
+## Built with Codex
+
+<!-- TODO before submitting. Fill this in yourself, from what you actually did. Do not let anyone
+     draft it for you and do not soften it: it is a statement to the judges about how this was
+     built, and the only version worth writing is the true one. Name the parts Codex wrote or
+     unblocked, say which model, and if GPT-5.6 access never landed then say the model you really
+     used. A thin honest paragraph beats a thick invented one, and an invented one is the only
+     thing here that can actually cost you the entry. Delete this comment when it is written. -->
+
 ## Where your data lives
 
 - Canvas state: `.identra/canvas.json` inside each project (gitignored by default).
 - Memory: a local SQLite database. Nothing leaves your machine.
+- The embedding model: fetched once into your OS cache directory, under `identra/models`. This is
+  the only thing Identra downloads, it is the model itself, and your memories are never part of it.
+  `IDENTRA_EMBEDDINGS=off` turns it off.
 - Secrets: none of Identra's business. Your agent keys stay in your agent's own config.
 
 ## Tasks
@@ -141,10 +197,26 @@ Identra uses a `justfile` for everything. Run `just` to list them.
 Early, and honest about it. What works today: agent nodes each running their own real CLI in a
 persistent canvas, a dock that reflects which agents you have installed and signed into, and
 connection edges that let two wired agents share context through the bus (draw the wire, then
-launch, since a CLI reads its MCP servers at startup). The memory crate is built but not yet on
-the recall path in the UI, and the browser node ships as a live preview (see
-`docs/browser-bridge.md` for why the agent-drive half needs Chromium). If something is rough, it is
-because I would rather ship the core working than a wide surface half working.
+launch, since a CLI reads its MCP servers at startup). Memory is on the recall path: agents read
+and write it through the bus, and the work panel shows you every fact the project holds, because
+memory only agents can read is memory you cannot check or correct.
+
+Recall works on meaning, not on words. Ask "how do we handle auth" and you get the decision that
+was written down as "the API issues JWT bearer tokens", which share no word at all. That runs on a
+small model on your machine (about 130MB, fetched once the first time you use memory, then it works
+offline). If you would rather it never reach the network, set `IDENTRA_EMBEDDINGS=off` and recall
+falls back to matching words, which is worse but yours.
+
+What it will not do is pretend. A search hands back the closest facts it has and says that is what
+they are, because the model's ranking is good but its scores cannot tell a real answer from a
+question about something this project never touched. Judging that is the agent's job, and it is
+better at it than a threshold would be.
+
+The browser node ships as a live preview (see `docs/browser-bridge.md` for why the agent-drive half
+needs Chromium).
+
+If something is rough, it is because I would rather ship the core working than a wide surface half
+working.
 
 ## Contributing
 
