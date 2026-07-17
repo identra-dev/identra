@@ -95,7 +95,7 @@ identra/
   crates/
     identra-core     the engine: PTY/terminal manager, canvas store, agent detection
     identra-memory   the memory layer: fact extraction, local embeddings, history
-    identra-mcp      MCP servers that expose memory (and, later, an agent bus)
+    identra-mcp      the context bus: an MCP server wired agents share context through
   apps/
     identra-desktop  Tauri v2 + React: the canvas, the nodes, the dock
   presets/
@@ -138,9 +138,12 @@ Identra uses a `justfile` for everything. Run `just` to list them.
 
 ## Status
 
-Early, and honest about it. The first milestone is a single agent node running a real `codex`
-in a persistent canvas, with the memory layer recalling context on a fresh node. Multi-agent
-hand-off between wired nodes is designed but not the focus yet. If something is rough, it is
+Early, and honest about it. What works today: agent nodes each running their own real CLI in a
+persistent canvas, a dock that reflects which agents you have installed and signed into, and
+connection edges that let two wired agents share context through the bus (draw the wire, then
+launch, since a CLI reads its MCP servers at startup). The memory crate is built but not yet on
+the recall path in the UI, and the browser node ships as a live preview (see
+`docs/browser-bridge.md` for why the agent-drive half needs Chromium). If something is rough, it is
 because I would rather ship the core working than a wide surface half working.
 
 ## Contributing
