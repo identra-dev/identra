@@ -107,8 +107,13 @@ as nodes beside you, and this project remembers what has been learned in it.
 
 Everything any agent has learned here is in one shared memory, and you can read it:
 
-- `search_memory(query)` recalls what is already known. Do this before you ask the user something
-  they may have answered before, and before you redo work someone already tried and rejected.
+- `list_memory()` is what this project already knows, newest first. Read it once when you start,
+  before you ask the user anything. It is the fastest way to find out what was already decided, and
+  it needs no guess about how a fact was worded.
+- `search_memory(query)` recalls what is known about one thing. It matches on words, so reach for it
+  when you know roughly how a fact would have been phrased, and use `list_memory()` when you do not.
+  Search before you ask the user something they may have answered before, and before you redo work
+  someone already tried and rejected.
 - `add_memory(text)` records something worth keeping: a decision, a constraint, a convention, or an
   approach that was tried and rejected and why. Write one self contained fact per call, with no
   pronouns, so it still reads correctly to an agent that was not here. Never store a secret.

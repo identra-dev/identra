@@ -67,6 +67,11 @@ const MEMORY_AGENT: &str = "workspace";
 /// prompt, small enough not to bury the agent's actual task.
 const RECALL_LIMIT: usize = 10;
 
+/// Browsing hands back more than a search does, because it is the whole picture rather than the
+/// answer to one question. Fifty facts is a couple of pages for the agent to read and still far more
+/// than a personal project accumulates in a week.
+const BROWSE_LIMIT: usize = 50;
+
 /// Open the workspace's memory, creating `.identra/` on the first write.
 ///
 /// I open per call rather than holding a connection on the bus: `Connection` is not `Sync`, these
@@ -325,8 +330,17 @@ fn tool_specs() -> Value {
             }
         },
         {
+            "name": "list_memory",
+            "description": "Everything this project has learned, newest first, from every agent that worked here before you. Call this once when you start, before you ask the user anything: it is how you find out what was already decided without having to guess what to search for.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"limit": {"type": "integer"}},
+                "additionalProperties": false
+            }
+        },
+        {
             "name": "search_memory",
-            "description": "Recall what has already been learned about this project, by you or by any other agent in earlier sessions. Search before asking the user something they may have already answered, and before redoing work someone already rejected.",
+            "description": "Recall what has already been learned about this project, by you or by any other agent in earlier sessions. Search before asking the user something they may have already answered, and before redoing work someone already rejected. Matching is on words, so if you are not sure how a fact was worded, use list_memory instead.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -501,18 +515,14 @@ async fn call_tool(bus: &Bus, caller: &str, params: Option<&Value>) -> Value {
             Ok(stored) => ok_text(&stored),
             Err(e) => err_text(&e),
         },
-        "search_memory" => {
-            let limit = args
-                .get("limit")
-                .and_then(Value::as_u64)
-                .map(|n| n as usize)
-                .filter(|n| *n > 0)
-                .unwrap_or(RECALL_LIMIT);
-            match recall(&dir, &arg_str("query"), limit) {
-                Ok(found) => ok_text(&found),
-                Err(e) => err_text(&e),
-            }
-        }
+        "list_memory" => match known(&dir, limit_arg(&args, BROWSE_LIMIT)) {
+            Ok(held) => ok_text(&held),
+            Err(e) => err_text(&e),
+        },
+        "search_memory" => match recall(&dir, &arg_str("query"), limit_arg(&args, RECALL_LIMIT)) {
+            Ok(found) => ok_text(&found),
+            Err(e) => err_text(&e),
+        },
         // The board, like memory, is workspace wide rather than edge gated. An edge is about
         // reading a peer's private terminal; work everyone can pick up is the opposite of private.
         "add_task" => {
@@ -877,6 +887,27 @@ fn remember(project_dir: &std::path::Path, caller: &str, text: &str) -> Result<S
     })
 }
 
+/// Every memory in the project, newest first. This is the one an agent should open a session with.
+///
+/// I added this because `recall` alone left a fresh agent stuck: to search you must already guess
+/// the words the fact was written in, and a search that misses is indistinguishable from a project
+/// that knows nothing. Browsing needs no guess. The store holds hundreds of facts for a personal
+/// project, so handing over the recent slice is cheaper than making an agent play word games with
+/// its own history.
+fn known(project_dir: &std::path::Path, limit: usize) -> Result<String, String> {
+    let store = open_memory(project_dir)?;
+    let scope = memory_scope(project_dir, "");
+    let filter = memory::Filter {
+        user_id: Some(scope.user_id),
+        ..Default::default()
+    };
+    let held = store.recent(&filter, limit).map_err(|e| e.to_string())?;
+    if held.is_empty() {
+        return Ok("this project has not learned anything yet".into());
+    }
+    Ok(bullets(&held))
+}
+
 fn recall(project_dir: &std::path::Path, query: &str, limit: usize) -> Result<String, String> {
     let store = open_memory(project_dir)?;
     let scope = memory_scope(project_dir, "");
@@ -890,13 +921,38 @@ fn recall(project_dir: &std::path::Path, query: &str, limit: usize) -> Result<St
         .search(&filter, query, limit)
         .map_err(|e| e.to_string())?;
     if hits.is_empty() {
-        return Ok("nothing remembered about that yet".into());
+        // A miss here means the query shared no words with any fact, which is not the same as the
+        // project knowing nothing. Saying "nothing remembered" would be a lie the agent acts on, by
+        // asking the user something it was already told. I hand back the recent facts and say what
+        // happened, so a bad guess degrades to browsing instead of to amnesia.
+        let held = store.recent(&filter, limit).map_err(|e| e.to_string())?;
+        if held.is_empty() {
+            return Ok("this project has not learned anything yet".into());
+        }
+        return Ok(format!(
+            "no fact matched those words. what this project does know, newest first:\n{}",
+            bullets(&held)
+        ));
     }
-    Ok(hits
+    Ok(bullets(&hits))
+}
+
+fn bullets(memories: &[memory::Memory]) -> String {
+    memories
         .iter()
         .map(|m| format!("- {}", m.content))
         .collect::<Vec<_>>()
-        .join("\n"))
+        .join("\n")
+}
+
+/// An agent that sends `limit: 0` means "no opinion", not "return nothing", so I fall back to the
+/// default rather than hand back an empty list it would read as an empty project.
+fn limit_arg(args: &Value, default: usize) -> usize {
+    args.get("limit")
+        .and_then(Value::as_u64)
+        .map(|n| n as usize)
+        .filter(|n| *n > 0)
+        .unwrap_or(default)
 }
 
 fn ok_text(text: &str) -> Value {
@@ -1023,6 +1079,7 @@ mod tests {
                 "send_to_node",
                 "check_inbox",
                 "add_memory",
+                "list_memory",
                 "search_memory",
                 "add_task",
                 "list_tasks",
@@ -1095,15 +1152,76 @@ mod tests {
             .unwrap()
             .contains("already remembered"));
 
-        // A miss says so plainly rather than returning an empty list the agent has to interpret.
+        // A query that matches nothing still hands back what is held. Matching is on words, so a
+        // miss means the agent guessed the wording wrong, and answering "nothing remembered" would
+        // send it to the user to ask about a decision this project has already made.
         let miss = find(&bus, "node-a", "kubernetes").await;
-        assert!(miss["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("nothing remembered"));
+        let text = miss["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("no fact matched those words"), "{text}");
+        assert!(
+            text.contains("postgres listen/notify"),
+            "a bad guess degrades to browsing, never to amnesia: {text}"
+        );
 
         // Empty text is a caller mistake, and silently storing it would poison recall.
         assert_eq!(add(&bus, "node-a", "   ").await["isError"], true);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The moment the whole product is built around: an agent arrives long after the decision was
+    /// made, describes it in its own words, and still starts from what was settled. Recall used to
+    /// be word matching only, so this agent was told the project knew nothing and would have gone
+    /// back to the user to re decide something already decided.
+    #[tokio::test]
+    async fn a_new_agent_starts_from_what_it_never_saw_decided() {
+        let dir = std::env::temp_dir().join(format!("identra-onboard-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let bus = bus_in(dir.clone());
+
+        call_tool(
+            &bus,
+            "node-a",
+            Some(&json!({"name": "add_memory", "arguments": {"text":
+                "The API issues JWT bearer tokens rather than server side sessions, because the \
+                 mobile client cannot hold cookies."}})),
+        )
+        .await;
+
+        // A fresh node opens its session the way the workspace guide tells it to: no query, no
+        // guess about wording, just what is known.
+        let held = call_tool(
+            &bus,
+            "node-b",
+            Some(&json!({"name": "list_memory", "arguments": {}})),
+        )
+        .await;
+        assert_eq!(held["isError"], false);
+        assert!(
+            held["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("JWT bearer tokens"),
+            "a fresh agent browsing memory sees the decision: {held}"
+        );
+
+        // And the words it would reach for on its own share nothing with how the fact was written.
+        // It still must not be told the project knows nothing.
+        let asked = call_tool(
+            &bus,
+            "node-b",
+            Some(
+                &json!({"name": "search_memory", "arguments": {"query": "how do we handle auth"}}),
+            ),
+        )
+        .await;
+        assert!(
+            asked["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("JWT bearer tokens"),
+            "asking in its own words still reaches the decision: {asked}"
+        );
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
