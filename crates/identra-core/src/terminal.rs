@@ -28,16 +28,36 @@ pub struct Output {
 // switch to a byte budget if someone wants real scrollback history.
 const MAX_CHUNKS: usize = 5000;
 
+/// The child is shared with the reader thread rather than owned here, because both need it: this
+/// side kills it, and the reader waits on it after EOF to learn how it ended.
+type Child = Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>;
+
 struct Terminal {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
-    child: Box<dyn portable_pty::Child + Send + Sync>,
+    child: Child,
     buffer: Arc<Mutex<VecDeque<Output>>>,
 }
 
-/// A callback invoked once per output chunk, from the reader thread. Identra's Tauri layer
-/// passes a closure that emits a window event; a test passes an mpsc sender.
-type Sink = Arc<dyn Fn(String, Output) + Send + Sync>;
+/// Something that happened to a terminal, in the order it happened.
+///
+/// Exit is here rather than being left for the caller to notice because nobody else can see it: the
+/// reader thread is the only thing holding the read end, so EOF is the first and only moment we
+/// know the agent is gone. Without this a finished agent looks exactly like an idle one, and the UI
+/// cannot tell "done" from "thinking".
+#[derive(Clone)]
+pub enum Event {
+    Output(Output),
+    /// The child is gone. `code` is `None` when it was killed by a signal or the status could not
+    /// be read, which is a real state and not worth inventing a number for.
+    Exit {
+        code: Option<u32>,
+    },
+}
+
+/// A callback invoked once per event, from the reader thread. Identra's Tauri layer passes a
+/// closure that emits a window event; a test passes an mpsc sender.
+type Sink = Arc<dyn Fn(String, Event) + Send + Sync>;
 
 pub struct TerminalManager {
     terminals: Mutex<HashMap<String, Terminal>>,
@@ -95,9 +115,11 @@ impl TerminalManager {
         let writer = pty.master.take_writer().map_err(Error::pty)?;
         let mut reader = pty.master.try_clone_reader().map_err(Error::pty)?;
 
+        let child: Child = Arc::new(Mutex::new(child));
         let buffer = Arc::new(Mutex::new(VecDeque::new()));
         let seq = Arc::new(AtomicU64::new(0));
         let (sink, buf, id_for_thread) = (self.sink.clone(), buffer.clone(), id.clone());
+        let child_for_thread = child.clone();
 
         thread::spawn(move || {
             let mut chunk = [0u8; 4096];
@@ -116,10 +138,20 @@ impl TerminalManager {
                                 b.pop_front();
                             }
                         }
-                        (sink)(id_for_thread.clone(), out);
+                        (sink)(id_for_thread.clone(), Event::Output(out));
                     }
                 }
             }
+            // EOF means the child let go of the pty, so it is finished or nearly so. I wait here to
+            // turn that into an exit code, then say so once. This thread is the only place that can:
+            // it is the one holding the read end.
+            let code = child_for_thread
+                .lock()
+                .unwrap()
+                .wait()
+                .ok()
+                .map(|status| status.exit_code());
+            (sink)(id_for_thread, Event::Exit { code });
         });
 
         self.terminals.lock().unwrap().insert(
@@ -173,9 +205,12 @@ impl TerminalManager {
     }
 
     /// Kill the child and forget the terminal. No-op if `id` is unknown.
+    ///
+    /// The reader thread still sees the resulting EOF and reports the exit, so a killed node ends
+    /// up in the same visible state as one that quit on its own.
     pub fn kill(&self, id: &str) -> Result<(), Error> {
-        if let Some(mut term) = self.terminals.lock().unwrap().remove(id) {
-            let _ = term.child.kill();
+        if let Some(term) = self.terminals.lock().unwrap().remove(id) {
+            let _ = term.child.lock().unwrap().kill();
         }
         Ok(())
     }
@@ -224,10 +259,10 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn spawns_captures_and_replays_output() {
+    fn spawns_captures_replays_output_and_reports_the_exit() {
         let (tx, rx) = mpsc::channel();
-        let mgr = TerminalManager::new(Arc::new(move |_id, out: Output| {
-            let _ = tx.send(out);
+        let mgr = TerminalManager::new(Arc::new(move |_id, event: Event| {
+            let _ = tx.send(event);
         }));
 
         mgr.start(
@@ -241,15 +276,26 @@ mod tests {
         )
         .expect("spawn echo");
 
-        // Live sink delivers the bytes.
+        // Live sink delivers the bytes, and then says the agent is gone. `echo` exits on its own,
+        // so this drives the whole life of a node: output, then exit, in that order.
         let mut live = Vec::new();
-        while let Ok(out) = rx.recv_timeout(Duration::from_secs(5)) {
-            live.extend_from_slice(&out.data);
-            if String::from_utf8_lossy(&live).contains("hello-identra") {
-                break;
+        let mut exit = None;
+        while let Ok(event) = rx.recv_timeout(Duration::from_secs(5)) {
+            match event {
+                Event::Output(out) => live.extend_from_slice(&out.data),
+                Event::Exit { code } => {
+                    exit = Some(code);
+                    break;
+                }
             }
         }
         assert!(String::from_utf8_lossy(&live).contains("hello-identra"));
+        // A finished agent has to be distinguishable from a quiet one, or the node cannot show it.
+        assert_eq!(
+            exit,
+            Some(Some(0)),
+            "echo exits cleanly and we hear about it"
+        );
 
         // Snapshot replays the same bytes and reports a non-zero seq (reattach path).
         let (snap, last) = mgr.snapshot("t1").expect("snapshot exists");

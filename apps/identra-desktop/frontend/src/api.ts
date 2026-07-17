@@ -40,6 +40,8 @@ export type WorkspaceMeta = { slug: string; title: string; path: string };
 
 export type Snapshot = { data: number[]; lastSeq: number };
 export type OutputEvent = { id: string; seq: number; data: number[] };
+// `code` is null when the agent was killed by a signal rather than exiting on its own.
+export type ExitEvent = { id: string; code: number | null };
 
 export const detectAgents = () => invoke<AgentInfo[]>("detect_agents");
 
@@ -97,6 +99,11 @@ export const workspaceOpen = (slug: string) =>
 export const onOutput = (cb: (e: OutputEvent) => void): Promise<UnlistenFn> =>
   listen<OutputEvent>("terminal://output", (evt) => cb(evt.payload));
 
+// Fires once per node, when its agent is gone. Without it a finished agent looks like a thinking
+// one forever, because silence is all the node would otherwise have to go on.
+export const onExit = (cb: (e: ExitEvent) => void): Promise<UnlistenFn> =>
+  listen<ExitEvent>("terminal://exit", (evt) => cb(evt.payload));
+
 // A canvas change an agent asked for. The canvas is the only writer of its own state, so the engine
 // asks rather than writing, and waits for the reply keyed by requestId.
 export type CanvasCommand = {
@@ -106,7 +113,8 @@ export type CanvasCommand = {
 };
 
 // What the canvas says it did. `id` names whatever was created, so the agent can talk about it.
-export type CanvasResult = { ok: true; id?: string } | { ok: false; error: string };
+export type CanvasResult =
+  { ok: true; id?: string } | { ok: false; error: string };
 
 export const onCanvasCommand = (
   cb: (c: CanvasCommand) => void,

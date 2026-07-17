@@ -4,6 +4,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import {
   agentsByKind,
+  onExit,
   onOutput,
   terminalInput,
   terminalResize,
@@ -20,9 +21,10 @@ export type AgentNodeData = { title: string; cwd: string | null; kind: string };
 function AgentNodeImpl({ id, data }: NodeProps) {
   const nodeData = data as AgentNodeData;
   const termHost = useRef<HTMLDivElement>(null);
-  // Honest liveness with no engine change: the node already hears every terminal://output chunk.
-  // A chunk flips the dot green; 1.5s of silence lets it settle back to idle orange.
-  const [state, setState] = useState<"ready" | "running">("ready");
+  // Three honest states. Output means it is working; 1.5s of quiet settles it back to ready. Exit
+  // is the only one the node cannot infer for itself, so the engine tells it: without that, an
+  // agent that finished looks exactly like one that is thinking, forever.
+  const [state, setState] = useState<"ready" | "running" | "exited">("ready");
 
   // One terminal per node, wired to the backend PTY. Runs once per mount; on a hot reload it
   // reattaches to the still-running PTY instead of restarting it.
@@ -51,8 +53,10 @@ function AgentNodeImpl({ id, data }: NodeProps) {
     const buffered: OutputEvent[] = [];
 
     let running = false;
+    let exited = false;
     let idleTimer: number | undefined;
     const markOutput = () => {
+      if (exited) return; // a dead agent producing bytes is drain, not life
       if (!running) {
         running = true;
         setState("running");
@@ -76,6 +80,18 @@ function AgentNodeImpl({ id, data }: NodeProps) {
       markOutput();
       if (ready) write(e);
       else buffered.push(e);
+    });
+
+    const unlistenExit = onExit((e) => {
+      if (e.id !== id) return;
+      window.clearTimeout(idleTimer); // it cannot go back to running now
+      running = false;
+      exited = true;
+      setState("exited");
+      // Say so in the terminal too. The dot tells you at a glance across the canvas; this tells you
+      // why when you look, and a non-zero code is the difference between finished and crashed.
+      const how = e.code === null ? "was stopped" : `exited (${e.code})`;
+      term.write(`\r\n\x1b[90m${nodeData.kind} ${how}\x1b[0m\r\n`);
     });
 
     void (async () => {
@@ -137,14 +153,15 @@ function AgentNodeImpl({ id, data }: NodeProps) {
       ro.disconnect();
       onData.dispose();
       void unlisten.then((un) => un());
+      void unlistenExit.then((un) => un());
       term.dispose();
-      // Frontend teardown only — the backend PTY stays alive so a reload can
+      // Frontend teardown only: the backend PTY stays alive so a reload can
       // reattach. App.onNodesDelete is what actually kills it.
     };
   }, [id]);
 
   return (
-    <div className="identra-node">
+    <div className="identra-node" data-state={state}>
       <Handle type="target" position={Position.Left} className="identra-port" />
       <Handle
         type="source"

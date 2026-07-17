@@ -366,3 +366,37 @@ body {
   border: none;
   background: transparent;
 }
+
+/* A node whose agent is gone. Grey and still: it is not idle, there is nothing behind it. */
+.identra-node__dot[data-state="exited"] {
+  background: var(--state-missing);
+}
+.identra-node[data-state="exited"] .identra-node__header {
+  opacity: 0.75;
+}
+
+/* First run: an empty grid with no explanation reads as a broken app. This sits above the canvas,
+   points at the dock, and disappears the moment there is a node to look at. Not interactive, so it
+   never gets in the way of a drag. */
+.identra-empty {
+  position: fixed;
+  left: 50%;
+  top: 42%;
+  transform: translate(-50%, -50%);
+  max-width: 380px;
+  text-align: center;
+  pointer-events: none;
+  user-select: none;
+}
+.identra-empty__lead {
+  margin: 0 0 8px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #cfcfcf;
+}
+.identra-empty__hint {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: #8f8f8f;
+}

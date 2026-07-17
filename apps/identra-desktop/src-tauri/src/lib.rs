@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use identra_core::canvas::{self, Canvas};
-use identra_core::terminal::{Output, TerminalManager};
+use identra_core::terminal::{Event as TerminalEvent, TerminalManager};
 use identra_core::workspace::{self, WorkspaceMeta};
 use identra_core::{detect, AgentInfo};
 use identra_mcp::server::Bus;
@@ -44,6 +44,13 @@ struct OutputEvent {
     id: String,
     seq: u64,
     data: Vec<u8>,
+}
+
+/// Pushed once, when a node's agent is gone. The node needs this to stop looking busy.
+#[derive(Clone, Serialize)]
+struct ExitEvent {
+    id: String,
+    code: Option<u32>,
 }
 
 /// The ring-buffer replay a node reads on (re)attach.
@@ -184,15 +191,20 @@ pub fn run() {
             // The sink emits each output chunk to the webview as it arrives.
             let handle: AppHandle = app.handle().clone();
             let manager = Arc::new(TerminalManager::new(Arc::new(
-                move |id: String, out: Output| {
-                    let _ = handle.emit(
-                        "terminal://output",
-                        OutputEvent {
-                            id,
-                            seq: out.seq,
-                            data: out.data,
-                        },
-                    );
+                move |id: String, event: TerminalEvent| match event {
+                    TerminalEvent::Output(out) => {
+                        let _ = handle.emit(
+                            "terminal://output",
+                            OutputEvent {
+                                id,
+                                seq: out.seq,
+                                data: out.data,
+                            },
+                        );
+                    }
+                    TerminalEvent::Exit { code } => {
+                        let _ = handle.emit("terminal://exit", ExitEvent { id, code });
+                    }
                 },
             )));
 

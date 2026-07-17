@@ -161,7 +161,12 @@ export default function App() {
 
   // Returns the new node's id, because an agent that asked for this needs to be able to name it.
   const addNode = useCallback(
-    (kind: string, title: string, cwd: string | null = null, at?: { x: number; y: number }) => {
+    (
+      kind: string,
+      title: string,
+      cwd: string | null = null,
+      at?: { x: number; y: number },
+    ) => {
       const vp = viewport.current;
       // Drop the node near the middle of what's currently on screen.
       const spot = at ?? {
@@ -219,37 +224,55 @@ export default function App() {
           const known = agentsRef.current.find((a) => a.id === kind);
           // Refuse rather than drop a node that can never run. The agent gets a reason it can act
           // on, which is better than a broken node appearing on the user's canvas.
-          if (!known) return { ok: false, error: `no agent called ${kind} is known here` };
+          if (!known)
+            return {
+              ok: false,
+              error: `no agent called ${kind} is known here`,
+            };
           if (!known.available) {
-            return { ok: false, error: `${known.name} is not installed on this machine` };
+            return {
+              ok: false,
+              error: `${known.name} is not installed on this machine`,
+            };
           }
           // Place a spawned node below its parent so a fan-out reads as a tree, not a pile.
           const parent = nodesRef.current.find((n) => n.id === p.connectTo);
           const at = parent
             ? { x: parent.position.x, y: parent.position.y + DEFAULT_H + 60 }
             : undefined;
-          const title = typeof p.title === "string" && p.title ? p.title : known.name;
+          const title =
+            typeof p.title === "string" && p.title ? p.title : known.name;
           const id = addNode(kind, title, null, at);
-          if (typeof p.connectTo === "string" && p.connectTo) wire(p.connectTo, id);
+          if (typeof p.connectTo === "string" && p.connectTo)
+            wire(p.connectTo, id);
           return { ok: true, id };
         }
         case "connect_nodes": {
           const { from, to } = p as { from?: string; to?: string };
-          const has = (id?: string) => nodesRef.current.some((n) => n.id === id);
+          const has = (id?: string) =>
+            nodesRef.current.some((n) => n.id === id);
           if (!has(from) || !has(to)) {
-            return { ok: false, error: "one of those nodes is not on the canvas" };
+            return {
+              ok: false,
+              error: "one of those nodes is not on the canvas",
+            };
           }
-          if (from === to) return { ok: false, error: "a node cannot be wired to itself" };
+          if (from === to)
+            return { ok: false, error: "a node cannot be wired to itself" };
           wire(from as string, to as string);
           return { ok: true, id: `${from}->${to}` };
         }
         case "add_note": {
           const text = typeof p.text === "string" ? p.text : "";
-          if (!text.trim()) return { ok: false, error: "a note needs some text" };
+          if (!text.trim())
+            return { ok: false, error: "a note needs some text" };
           return { ok: true, id: addNode("note", text) };
         }
         default:
-          return { ok: false, error: `the canvas does not know how to ${cmd.action}` };
+          return {
+            ok: false,
+            error: `the canvas does not know how to ${cmd.action}`,
+          };
       }
     },
     [addNode, wire],
@@ -298,6 +321,19 @@ export default function App() {
         <Background color="#3a3a3a" gap={24} />
         <Controls showInteractive={false} />
       </ReactFlow>
+
+      {/* A blank grid reads as a broken app. This says what the canvas is for and points at the one
+          thing to do next, and it goes away the moment there is anything to look at. */}
+      {nodes.length === 0 && (
+        <div className="identra-empty">
+          <p className="identra-empty__lead">This workspace is empty.</p>
+          <p className="identra-empty__hint">
+            Pick an agent from the dock below to run it here. Drop in a second
+            one and draw a wire between them, and they can split the work
+            between themselves.
+          </p>
+        </div>
+      )}
 
       <div className="identra-workspace" title={workspace.path}>
         {workspace.title}

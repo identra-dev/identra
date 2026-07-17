@@ -40,7 +40,9 @@ export default function WorkspacePicker({
         </p>
 
         {workspaces === null ? (
-          <p className="identra-picker__empty">Looking for your workspaces...</p>
+          <p className="identra-picker__empty">
+            Looking for your workspaces...
+          </p>
         ) : workspaces.length === 0 ? (
           <p className="identra-picker__empty">
             No workspaces yet. Make your first one.
