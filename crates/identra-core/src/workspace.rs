@@ -140,6 +140,37 @@ mod tests {
     }
 
     #[test]
+    fn a_workspace_can_only_be_found_inside_the_root() {
+        let root = std::env::temp_dir().join(format!("identra-ws-esc-{}", std::process::id()));
+        let outside = std::env::temp_dir().join(format!("identra-ws-out-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+        std::fs::create_dir_all(&root).unwrap();
+
+        // A real workspace sitting outside the root, canvas and all. This is the thing a traversal
+        // would be reaching for: somewhere that looks like a workspace but is not one of ours.
+        canvas::save(&outside, &Canvas::default()).unwrap();
+        create(&root, "mine").unwrap();
+
+        // list is the only way in, and it only ever walks the root's own children. There is no name
+        // that makes it return the folder outside, because it never joins a caller's string onto a
+        // path: it reports what it found.
+        let found = list(&root);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].slug, "mine");
+        for attempt in ["../identra-ws-out", "..", "../..", "/tmp"] {
+            assert!(
+                !found.iter().any(|w| w.slug == attempt),
+                "{attempt} must not resolve to a workspace"
+            );
+        }
+        assert!(found[0].path.starts_with(root.to_str().unwrap()));
+
+        std::fs::remove_dir_all(&root).unwrap();
+        std::fs::remove_dir_all(&outside).unwrap();
+    }
+
+    #[test]
     fn create_dedups_and_round_trips_the_canvas() {
         let root = std::env::temp_dir().join(format!("identra-ws-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);

@@ -205,12 +205,20 @@ fn workspace_create(
 }
 
 /// Switch to an existing workspace and hand back its canvas.
+///
+/// The slug is looked up among the workspaces that actually exist, rather than joined onto the root
+/// and checked afterwards. Joining would mean trusting a name from the window: `../../somewhere`
+/// resolves out of the workspaces root, and activating a workspace writes files into it and points
+/// every agent there. Choosing from a list I built cannot be made to leave the root at all, and it
+/// is no more code than validating the name would be.
 #[tauri::command]
 fn workspace_open(state: State<AppState>, slug: String) -> Result<Canvas, String> {
-    let path = workspaces_root()?.join(&slug);
-    if !canvas::canvas_path(&path).is_file() {
-        return Err(format!("no workspace named {slug}"));
-    }
+    let root = workspaces_root()?;
+    let found = workspace::list(&root)
+        .into_iter()
+        .find(|w| w.slug == slug)
+        .ok_or_else(|| format!("no workspace named {slug}"))?;
+    let path = PathBuf::from(&found.path);
     state.activate(path.clone())?;
     Ok(canvas::load(&path))
 }
