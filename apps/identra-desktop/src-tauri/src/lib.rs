@@ -1,24 +1,41 @@
-//! Identra's Tauri shell. Thin: it owns the window, holds one [`TerminalManager`] and the
-//! project directory in managed state, and forwards typed commands to `identra-core`. All the
-//! real logic lives in the engine so this file stays boring.
+//! Identra's Tauri shell. Thin: it owns the window, holds the terminal manager, the context bus,
+//! and the active workspace, and forwards typed commands to `identra-core`. All the real logic
+//! lives in the engine so this file stays boring.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use identra_core::canvas::{self, Canvas};
 use identra_core::terminal::{Output, TerminalManager};
+use identra_core::workspace::{self, WorkspaceMeta};
 use identra_core::{detect, AgentInfo};
 use identra_mcp::server::Bus;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 struct AppState {
     manager: Arc<TerminalManager>,
-    project_dir: PathBuf,
-    // The context bus lives in this process and shares `manager`. I keep the port so the config
-    // writer can point codex at the running server.
+    /// The active workspace directory. Shared with the bus (not copied) so switching workspace
+    /// moves both: the tools have to read the canvas the user is actually looking at.
+    project_dir: Arc<Mutex<PathBuf>>,
     bus: Arc<Bus>,
     mcp_port: u16,
+}
+
+impl AppState {
+    fn dir(&self) -> PathBuf {
+        self.project_dir.lock().unwrap().clone()
+    }
+
+    /// Point the app at a workspace and make sure that folder is ready for agents: the bus config
+    /// claude reads, and the guide that tells the agents they can work with each other. I do this
+    /// on every open because the bus port changes per launch.
+    fn activate(&self, path: PathBuf) -> Result<(), String> {
+        identra_mcp::config::write_mcp_json(&path, self.mcp_port).map_err(|e| e.to_string())?;
+        identra_mcp::config::write_guides(&path).map_err(|e| e.to_string())?;
+        *self.project_dir.lock().unwrap() = path;
+        Ok(())
+    }
 }
 
 /// Pushed to the webview once per output chunk. The node writes `data` straight into xterm.
@@ -37,26 +54,41 @@ struct Snapshot {
     last_seq: u64,
 }
 
+fn workspaces_root() -> Result<PathBuf, String> {
+    workspace::root().ok_or_else(|| "cannot find a home directory for workspaces".to_string())
+}
+
 #[tauri::command]
 fn detect_agents() -> Vec<AgentInfo> {
     detect()
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 fn terminal_start(
     state: State<AppState>,
     id: String,
+    kind: String,
     cmd: String,
     args: Vec<String>,
     cwd: Option<String>,
     rows: u16,
     cols: u16,
 ) -> Result<(), String> {
-    let dir = cwd.unwrap_or_else(|| state.project_dir.display().to_string());
-    // Mint this node's bus bearer and hand it to the CLI through the env, so the token never
-    // reaches the frontend. A node with no edges gets a token too and simply never uses it.
-    let token = state.bus.issue_token(&id);
-    let env = [("IDENTRA_BUS_TOKEN".to_string(), token)];
+    let workspace = state.dir();
+    let dir = cwd.unwrap_or_else(|| workspace.display().to_string());
+
+    // Put this node on the bus at launch, because every CLI reads its MCP servers once at startup.
+    // The extra args carry the server (codex takes it inline, claude gets pointed at the workspace
+    // .mcp.json), and the env carries who this node is. The token never touches the frontend.
+    let mut args = args;
+    args.extend(identra_mcp::config::launch_args(
+        &kind,
+        state.mcp_port,
+        &workspace,
+    ));
+    let env = identra_mcp::config::launch_env(state.mcp_port, state.bus.token(), &id);
+
     state
         .manager
         .start(id, &cmd, &args, Some(&dir), &env, rows, cols)
@@ -94,27 +126,50 @@ fn terminal_kill(state: State<AppState>, id: String) -> Result<(), String> {
 
 #[tauri::command]
 fn canvas_load(state: State<AppState>) -> Canvas {
-    canvas::load(&state.project_dir)
+    canvas::load(&state.dir())
 }
 
 #[tauri::command]
 fn canvas_save(state: State<AppState>, canvas: Canvas) -> Result<(), String> {
-    canvas::save(&state.project_dir, &canvas).map_err(|e| e.to_string())
+    canvas::save(&state.dir(), &canvas).map_err(|e| e.to_string())
 }
 
-/// Write the bus into codex's config so a codex node picks up the three tools at launch. The
-/// frontend calls this when the first edge is drawn, before the wired nodes are launched, because
-/// codex reads its MCP servers only at startup. Writes an Identra-owned block and backs up the
-/// original; the block is removed again on exit.
 #[tauri::command]
-fn write_agent_mcp_config(state: State<AppState>) -> Result<(), String> {
-    let path = identra_mcp::config::codex_config_path()
-        .ok_or_else(|| "cannot locate the codex config (no HOME or CODEX_HOME set)".to_string())?;
-    identra_mcp::config::write_codex_bus(&path, state.mcp_port).map_err(|e| e.to_string())
+fn workspace_list() -> Result<Vec<WorkspaceMeta>, String> {
+    let root = workspaces_root()?;
+    // The root not existing yet is not an error, it just means no workspaces.
+    let _ = std::fs::create_dir_all(&root);
+    Ok(workspace::list(&root))
+}
+
+/// Make a workspace and open it. The folder is the workspace, and it is also the directory the
+/// agents in it will run in.
+#[tauri::command]
+fn workspace_create(
+    state: State<AppState>,
+    title: Option<String>,
+) -> Result<WorkspaceMeta, String> {
+    let root = workspaces_root()?;
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    let meta = workspace::create(&root, title.as_deref().unwrap_or(workspace::DEFAULT_TITLE))
+        .map_err(|e| e.to_string())?;
+    state.activate(PathBuf::from(&meta.path))?;
+    Ok(meta)
+}
+
+/// Switch to an existing workspace and hand back its canvas.
+#[tauri::command]
+fn workspace_open(state: State<AppState>, slug: String) -> Result<Canvas, String> {
+    let path = workspaces_root()?.join(&slug);
+    if !canvas::canvas_path(&path).is_file() {
+        return Err(format!("no workspace named {slug}"));
+    }
+    state.activate(path.clone())?;
+    Ok(canvas::load(&path))
 }
 
 pub fn run() {
-    let app = tauri::Builder::default()
+    tauri::Builder::default()
         .setup(|app| {
             // The sink emits each output chunk to the webview as it arrives.
             let handle: AppHandle = app.handle().clone();
@@ -130,12 +185,15 @@ pub fn run() {
                     );
                 },
             )));
-            // Project = the dir Identra launched in. A real "open project" picker is
-            // its own follow-up; `.identra/canvas.json` lands here for now.
-            let project_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
-            // Bring the bus up before the window is interactive, so its port is known when the
-            // first edge is drawn. It shares `manager`, so a peer read hits the same live PTY.
+            // Until the user picks a workspace there is no canvas to read, so the active dir starts
+            // at the workspaces root and every canvas command is a no-op blank board. The frontend
+            // shows the workspace picker in that state.
+            let start_dir = workspace::root().unwrap_or_else(|| PathBuf::from("."));
+            let project_dir = Arc::new(Mutex::new(start_dir));
+
+            // Bring the bus up before the window is interactive, so its port is known when a
+            // workspace opens and writes the config the agents read at launch.
             let (listener, mcp_port) = identra_mcp::server::bind()?;
             let bus = Arc::new(Bus::new(manager.clone(), project_dir.clone()));
             let bus_for_task = bus.clone();
@@ -162,21 +220,10 @@ pub fn run() {
             terminal_kill,
             canvas_load,
             canvas_save,
-            write_agent_mcp_config
+            workspace_list,
+            workspace_create,
+            workspace_open
         ])
-        .build(tauri::generate_context!())
-        .expect("error while building Identra");
-
-    app.run(|_handle, event| {
-        // On exit, take Identra's block back out of codex's config so the user's normal CLI is
-        // exactly as it was. Best effort: the app is closing, so I report a failure to stderr
-        // rather than swallow it, but there is no UI left to show it in.
-        if let RunEvent::Exit = event {
-            if let Some(path) = identra_mcp::config::codex_config_path() {
-                if let Err(e) = identra_mcp::config::restore_codex(&path) {
-                    eprintln!("identra: could not restore codex config: {e}");
-                }
-            }
-        }
-    });
+        .run(tauri::generate_context!())
+        .expect("error while running Identra");
 }

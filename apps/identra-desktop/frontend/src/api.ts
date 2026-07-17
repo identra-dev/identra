@@ -27,7 +27,16 @@ export type CanvasNode = {
 export type Edge = { id: string; source: string; target: string };
 
 export type Viewport = { x: number; y: number; zoom: number };
-export type Canvas = { nodes: CanvasNode[]; edges: Edge[]; viewport: Viewport };
+export type Canvas = {
+  nodes: CanvasNode[];
+  edges: Edge[];
+  viewport: Viewport;
+  title: string;
+};
+
+// A workspace is a folder: `path` is where it really lives, `slug` is the folder name and the id,
+// `title` is what the user reads.
+export type WorkspaceMeta = { slug: string; title: string; path: string };
 
 export type Snapshot = { data: number[]; lastSeq: number };
 export type OutputEvent = { id: string; seq: number; data: number[] };
@@ -46,14 +55,17 @@ export const agentsByKind = (): Promise<Map<string, AgentInfo>> => {
   return agentCache;
 };
 
+// `kind` is the agent id. The engine uses it to add that CLI's bus wiring at launch, which is the
+// only moment it can happen: every agent reads its MCP servers once, on startup.
 export const terminalStart = (
   id: string,
+  kind: string,
   cmd: string,
   args: string[],
   cwd: string | null,
   rows: number,
   cols: number,
-) => invoke<void>("terminal_start", { id, cmd, args, cwd, rows, cols });
+) => invoke<void>("terminal_start", { id, kind, cmd, args, cwd, rows, cols });
 
 export const terminalInput = (id: string, data: string) =>
   invoke<void>("terminal_input", { id, data });
@@ -72,9 +84,15 @@ export const canvasLoad = () => invoke<Canvas>("canvas_load");
 export const canvasSave = (canvas: Canvas) =>
   invoke<void>("canvas_save", { canvas });
 
-// Point codex at the running context bus by writing its MCP config. Called when the first edge is
-// drawn, since codex reads its server list only at launch.
-export const writeAgentMcpConfig = () => invoke<void>("write_agent_mcp_config");
+export const workspaceList = () => invoke<WorkspaceMeta[]>("workspace_list");
+
+// Creating a workspace makes the folder, writes a blank canvas into it, and makes it active. The
+// same folder is where the agents in it will run.
+export const workspaceCreate = (title?: string) =>
+  invoke<WorkspaceMeta>("workspace_create", { title: title ?? null });
+
+export const workspaceOpen = (slug: string) =>
+  invoke<Canvas>("workspace_open", { slug });
 
 export const onOutput = (cb: (e: OutputEvent) => void): Promise<UnlistenFn> =>
   listen<OutputEvent>("terminal://output", (evt) => cb(evt.payload));

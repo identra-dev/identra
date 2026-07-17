@@ -17,16 +17,16 @@ import "@xyflow/react/dist/style.css";
 import "@xterm/xterm/css/xterm.css";
 import AgentNode, { type AgentNodeData } from "./AgentNode";
 import BrowserNode from "./BrowserNode";
-import { iconFor } from "./icons";
+import WorkspacePicker from "./WorkspacePicker";
+import { AgentIcon } from "./icons";
 import {
-  canvasLoad,
   canvasSave,
   detectAgents,
   terminalKill,
-  writeAgentMcpConfig,
+  workspaceOpen,
   type AgentInfo,
-  type Canvas,
   type CanvasNode,
+  type WorkspaceMeta,
 } from "./api";
 
 type FNode = Node<AgentNodeData>;
@@ -61,6 +61,7 @@ function toCanvasNode(n: FNode): CanvasNode {
 }
 
 export default function App() {
+  const [workspace, setWorkspace] = useState<WorkspaceMeta | null>(null);
   const [nodes, setNodes] = useState<FNode[]>([]);
   const [edges, setEdges] = useState<FEdge[]>([]);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
@@ -69,25 +70,28 @@ export default function App() {
   // hold the latest of both so a save always writes a consistent nodes+edges pair.
   const nodesRef = useRef<FNode[]>([]);
   const edgesRef = useRef<FEdge[]>([]);
-  const [ready, setReady] = useState(false);
+  const titleRef = useRef("");
   const saveTimer = useRef<number | undefined>(undefined);
-  // The bus config is written once per session, the first time a wire appears.
-  const busConfigWritten = useRef(false);
 
   useEffect(() => {
-    void canvasLoad().then((c: Canvas) => {
-      const loaded = c.nodes.map(toFlow);
-      nodesRef.current = loaded;
-      edgesRef.current = c.edges; // old canvas.json with no edges deserializes to []
-      setNodes(loaded);
-      setEdges(c.edges);
-      viewport.current = c.viewport;
-      setReady(true);
-    });
     void detectAgents().then(setAgents);
   }, []);
 
-  // Debounced atomic save — the engine writes atomically; we just avoid thrashing on drag.
+  // Opening is what makes a workspace active in the engine: it repoints the canvas, and writes the
+  // bus config and the agent guide into that folder so any agent launched here can find its peers.
+  const openWorkspace = useCallback(async (w: WorkspaceMeta) => {
+    const canvas = await workspaceOpen(w.slug);
+    const loaded = canvas.nodes.map(toFlow);
+    nodesRef.current = loaded;
+    edgesRef.current = canvas.edges;
+    titleRef.current = canvas.title;
+    setNodes(loaded);
+    setEdges(canvas.edges);
+    viewport.current = canvas.viewport;
+    setWorkspace(w);
+  }, []);
+
+  // Debounced atomic save. The engine writes atomically; we just avoid thrashing on drag.
   const scheduleSave = useCallback(() => {
     window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(() => {
@@ -99,6 +103,7 @@ export default function App() {
           target: e.target,
         })),
         viewport: viewport.current,
+        title: titleRef.current,
       });
     }, 400);
   }, []);
@@ -135,15 +140,6 @@ export default function App() {
         scheduleSave();
         return next;
       });
-      // Write the bus into codex's config the moment the first wire exists, so a codex node
-      // launched after this picks up the tools at startup. It fails harmlessly if codex is not
-      // set up: the edge still draws and persists, there is just no bus to join.
-      if (!busConfigWritten.current) {
-        busConfigWritten.current = true;
-        void writeAgentMcpConfig().catch((e) => {
-          console.warn("identra: could not write the codex bus config", e);
-        });
-      }
     },
     [scheduleSave],
   );
@@ -180,9 +176,9 @@ export default function App() {
     [scheduleSave],
   );
 
-  if (!ready) return null;
-
-  const browserIcon = iconFor("browser");
+  if (!workspace) {
+    return <WorkspacePicker onOpen={(w) => void openWorkspace(w)} />;
+  }
 
   return (
     <div className="identra-root">
@@ -208,9 +204,12 @@ export default function App() {
         <Controls showInteractive={false} />
       </ReactFlow>
 
+      <div className="identra-workspace" title={workspace.path}>
+        {workspace.title}
+      </div>
+
       <div className="identra-dock">
         {agents.map((a) => {
-          const icon = iconFor(a.id);
           const state = a.available
             ? a.logged_in
               ? "ready"
@@ -225,18 +224,13 @@ export default function App() {
               title={
                 a.available
                   ? a.logged_in
-                    ? `${a.name} — signed in`
-                    : `${a.name} — installed, not signed in`
-                  : `${a.name} — not installed`
+                    ? `${a.name}, signed in`
+                    : `${a.name}, installed but not signed in`
+                  : `${a.name}, not installed`
               }
               onClick={() => addNode(a.id, a.name)}
             >
-              <span
-                className="identra-dock__tile"
-                style={{ background: icon.tile }}
-              >
-                {icon.glyph}
-              </span>
+              <AgentIcon kind={a.id} className="identra-dock__tile" />
               <span className="identra-dock__label">{a.name}</span>
               <span className="identra-dock__dot" data-state={state} />
             </button>
@@ -245,15 +239,10 @@ export default function App() {
         <button
           className="identra-dock__btn"
           data-state="ready"
-          title="Browser — open a web view on the canvas"
-          onClick={() => addNode("browser", "Browser", "http://localhost:5173")}
+          title="Browser, open a web view on the canvas"
+          onClick={() => addNode("browser", "Browser", "http://localhost:1420")}
         >
-          <span
-            className="identra-dock__tile"
-            style={{ background: browserIcon.tile }}
-          >
-            {browserIcon.glyph}
-          </span>
+          <AgentIcon kind="browser" className="identra-dock__tile" />
           <span className="identra-dock__label">Browser</span>
         </button>
       </div>
