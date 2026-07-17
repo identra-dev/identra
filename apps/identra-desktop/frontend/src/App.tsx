@@ -482,7 +482,21 @@ export default function App() {
                     : `${a.name}, installed but not signed in`
                   : `${a.name}, not installed`
               }
-              onClick={() => addNode(a.id, a.name)}
+              onClick={() => {
+                // A signed-in agent just opens. One that is installed but not signed in would drop
+                // the user into a raw login prompt with no idea why, so I name what is about to
+                // happen first. The node still runs the real CLI, which is where the sign-in lives,
+                // so this is a heads-up and not a second login path to keep in step.
+                if (
+                  state === "setup" &&
+                  !window.confirm(
+                    `${a.name} is installed but not signed in.\n\nOpening it will start its own sign-in in the node. Follow the prompts there, then the dot turns green.`,
+                  )
+                ) {
+                  return;
+                }
+                addNode(a.id, a.name);
+              }}
             >
               <AgentIcon kind={a.id} className="identra-dock__tile" />
               <span className="identra-dock__label">{a.name}</span>
