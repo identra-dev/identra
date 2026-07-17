@@ -181,6 +181,16 @@ nothing to claim and will just sit there. Add the tasks, then add the agent, the
 Do not spawn help for work you could finish in the time it takes to explain it. Every extra agent
 is another thing your user is paying for and reading.
 
+## Waiting on someone
+
+- `get_node_status(nodeId)` says whether a node is working, quiet, or gone.
+- `wait_for_nodes(nodeIds, timeoutSec?)` blocks until they stop working. Use it when you genuinely
+  cannot continue without their result. Do not write your own polling loop.
+
+Read the answer carefully. A node goes quiet when it finishes and also when it is stuck waiting on
+its human, and neither of those means the work is good. When a peer goes quiet, check what they
+changed or ask them, before you build on it.
+
 ## Two agents, one repo
 
 Two agents editing the same file overwrite each other. There are two ways out, and the right one

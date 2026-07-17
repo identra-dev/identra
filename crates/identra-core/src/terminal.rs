@@ -32,11 +32,34 @@ const MAX_CHUNKS: usize = 5000;
 /// side kills it, and the reader waits on it after EOF to learn how it ended.
 type Child = Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>;
 
+/// How long a terminal must be silent before I call it idle rather than working.
+///
+/// This is a heuristic and it is the honest one available. A CLI agent gives no "I am done" signal
+/// over a PTY: it just stops printing. So thinking looks like output (a spinner, a token stream)
+/// and finished looks like quiet. A second and a half is long enough not to trip on the gap between
+/// two tokens, short enough that a waiting agent is not left guessing.
+const QUIET: std::time::Duration = std::time::Duration::from_millis(1500);
+
 struct Terminal {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     child: Child,
     buffer: Arc<Mutex<VecDeque<Output>>>,
+    /// When this node last printed anything. Shared with the reader thread, which is what stamps it.
+    last_output: Arc<Mutex<std::time::Instant>>,
+    exited: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// What a node is doing, as far as anything outside it can tell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Status {
+    /// Printing, so it is working on something.
+    Running,
+    /// Alive and quiet. Either waiting at its prompt or waiting on its human.
+    Idle,
+    /// The agent is gone.
+    Exited,
 }
 
 /// Something that happened to a terminal, in the order it happened.
@@ -118,8 +141,11 @@ impl TerminalManager {
         let child: Child = Arc::new(Mutex::new(child));
         let buffer = Arc::new(Mutex::new(VecDeque::new()));
         let seq = Arc::new(AtomicU64::new(0));
+        let last_output = Arc::new(Mutex::new(std::time::Instant::now()));
+        let exited = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (sink, buf, id_for_thread) = (self.sink.clone(), buffer.clone(), id.clone());
         let child_for_thread = child.clone();
+        let (seen, done) = (last_output.clone(), exited.clone());
 
         thread::spawn(move || {
             let mut chunk = [0u8; 4096];
@@ -138,10 +164,12 @@ impl TerminalManager {
                                 b.pop_front();
                             }
                         }
+                        *seen.lock().unwrap() = std::time::Instant::now();
                         (sink)(id_for_thread.clone(), Event::Output(out));
                     }
                 }
             }
+            done.store(true, Ordering::SeqCst);
             // EOF means the child let go of the pty, so it is finished or nearly so. I wait here to
             // turn that into an exit code, then say so once. This thread is the only place that can:
             // it is the one holding the read end.
@@ -161,6 +189,8 @@ impl TerminalManager {
                 writer,
                 child,
                 buffer,
+                last_output,
+                exited,
             },
         );
         Ok(())
@@ -218,6 +248,25 @@ impl TerminalManager {
     /// Ids of every live terminal.
     pub fn ids(&self) -> Vec<String> {
         self.terminals.lock().unwrap().keys().cloned().collect()
+    }
+
+    /// What `id` is doing, or `None` if there is no such terminal.
+    ///
+    /// Read from output timing rather than asked of the agent, because there is nothing to ask: a
+    /// CLI over a PTY has no way to say "I finished". Quiet is the only signal it gives, so quiet is
+    /// what I report, and the caller is told plainly that is what this means.
+    pub fn status(&self, id: &str) -> Option<Status> {
+        let terms = self.terminals.lock().unwrap();
+        let term = terms.get(id)?;
+        if term.exited.load(Ordering::SeqCst) {
+            return Some(Status::Exited);
+        }
+        let quiet_for = term.last_output.lock().unwrap().elapsed();
+        Some(if quiet_for < QUIET {
+            Status::Running
+        } else {
+            Status::Idle
+        })
     }
 }
 
@@ -296,6 +345,11 @@ mod tests {
             Some(Some(0)),
             "echo exits cleanly and we hear about it"
         );
+
+        // The same fact is readable on demand, which is what an agent waiting on a helper needs.
+        // Exited is known, not inferred from silence, so waiting on it cannot be wrong.
+        assert_eq!(mgr.status("t1"), Some(Status::Exited));
+        assert_eq!(mgr.status("never-started"), None);
 
         // Snapshot replays the same bytes and reports a non-zero seq (reattach path).
         let (snap, last) = mgr.snapshot("t1").expect("snapshot exists");

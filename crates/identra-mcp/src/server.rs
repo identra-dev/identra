@@ -98,6 +98,14 @@ pub type Emit = Arc<dyn Fn(CanvasCommand) + Send + Sync>;
 /// busy renderer, short enough that a closed window does not hang the agent's turn.
 const CANVAS_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// How long `wait_for_nodes` waits when the caller does not say, and the most it will ever wait.
+/// The cap exists because a wait is a held tool call: an agent that asks to wait an hour has
+/// stopped being useful and should be told to check back instead.
+const DEFAULT_WAIT_SECS: u64 = 120;
+const MAX_WAIT_SECS: u64 = 600;
+/// Slow enough not to spin, fast enough that a short task does not feel stalled.
+const WAIT_POLL: Duration = Duration::from_millis(750);
+
 /// Shared bus state. Holds the same `TerminalManager` the Tauri commands hold, so a peer's live
 /// transcript and stdin are the exact ones on the canvas, and reads the canvas fresh per call so a
 /// wire pulled mid-session takes effect immediately.
@@ -399,6 +407,27 @@ fn tool_specs() -> Value {
                 "properties": {"text": {"type": "string"}},
                 "required": ["text"]
             }
+        },
+        {
+            "name": "get_node_status",
+            "description": "Check whether a node is working, waiting, or gone. Read from its output: an agent that is thinking prints, an agent that is done goes quiet. Quiet can also mean it is stuck waiting on its human, so do not read it as success.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"nodeId": {"type": "string"}},
+                "required": ["nodeId"]
+            }
+        },
+        {
+            "name": "wait_for_nodes",
+            "description": "Block until the named nodes stop working, then carry on. Use it after you hand work to a helper and genuinely cannot proceed without their result. Do not poll in a loop yourself. Going quiet is not the same as succeeding: check their work, or ask them, before you rely on it.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "nodeIds": {"type": "array", "items": {"type": "string"}},
+                    "timeoutSec": {"type": "integer"}
+                },
+                "required": ["nodeIds"]
+            }
         }
     ])
 }
@@ -636,8 +665,92 @@ async fn call_tool(bus: &Bus, caller: &str, params: Option<&Value>) -> Value {
                 Err(e) => err_text(&e),
             }
         }
+        "get_node_status" => {
+            let id = arg_str("nodeId");
+            ok_text(&describe_status(bus, &canvas, &id))
+        }
+        "wait_for_nodes" => {
+            let ids: Vec<String> = args
+                .get("nodeIds")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            if ids.is_empty() {
+                return err_text("wait_for_nodes needs at least one node id");
+            }
+            let budget = args
+                .get("timeoutSec")
+                .and_then(Value::as_u64)
+                .unwrap_or(DEFAULT_WAIT_SECS)
+                .clamp(5, MAX_WAIT_SECS);
+            ok_text(&wait_for(bus, &canvas, &ids, Duration::from_secs(budget)).await)
+        }
         other => err_text(&format!("unknown tool: {other}")),
     }
+}
+
+/// A node's state in words, with its name, because an agent asked about "node-3" and thinks about
+/// "the one writing the tests".
+fn describe_status(bus: &Bus, canvas: &canvas::Canvas, id: &str) -> String {
+    let name = node_title(canvas, id);
+    match bus.manager.status(id) {
+        Some(identra_core::terminal::Status::Running) => format!("{name} is working"),
+        Some(identra_core::terminal::Status::Idle) => {
+            format!("{name} is quiet: it has either finished or is waiting on its human")
+        }
+        Some(identra_core::terminal::Status::Exited) => format!("{name} has exited"),
+        // On the canvas but never launched, or already killed. Both are "not working", which is what
+        // the caller actually wants to know.
+        None => format!("{name} is not running"),
+    }
+}
+
+/// True when there is no point waiting on this node any longer: it is quiet, gone, or never ran.
+fn settled(bus: &Bus, id: &str) -> bool {
+    !matches!(
+        bus.manager.status(id),
+        Some(identra_core::terminal::Status::Running)
+    )
+}
+
+/// Wait until every named node stops working, or the budget runs out.
+///
+/// I poll rather than wait on the exit event because finishing a turn is not exiting: an agent that
+/// answers and returns to its prompt is done with the work and still very much alive. Quiet is the
+/// only signal a PTY gives for that, so quiet is what I watch, and the answer says so rather than
+/// claiming the work succeeded.
+async fn wait_for(bus: &Bus, canvas: &canvas::Canvas, ids: &[String], budget: Duration) -> String {
+    let deadline = std::time::Instant::now() + budget;
+    loop {
+        if ids.iter().all(|id| settled(bus, id)) {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            let busy: Vec<String> = ids
+                .iter()
+                .filter(|id| !settled(bus, id))
+                .map(|id| node_title(canvas, id))
+                .collect();
+            return format!(
+                "still working when the wait ran out: {}. They may be stuck on their human, so check on them rather than waiting again.",
+                busy.join(", ")
+            );
+        }
+        tokio::time::sleep(WAIT_POLL).await;
+    }
+    let lines: Vec<String> = ids
+        .iter()
+        .map(|id| format!("- {}", describe_status(bus, canvas, id)))
+        .collect();
+    format!(
+        "done waiting.\n{}\n\nQuiet is not the same as finished well. Read what they changed, or ask them, before you build on it.",
+        lines.join("\n")
+    )
 }
 
 /// Turn the canvas's `{ok, id?, error?}` answer into something the agent can act on. A refusal from
@@ -916,6 +1029,8 @@ mod tests {
                 "add_terminal",
                 "connect_nodes",
                 "add_note",
+                "get_node_status",
+                "wait_for_nodes",
             ]
         );
 
@@ -986,6 +1101,68 @@ mod tests {
 
         // Empty text is a caller mistake, and silently storing it would poison recall.
         assert_eq!(add(&bus, "node-a", "   ").await["isError"], true);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn waiting_on_a_node_returns_and_never_claims_success() {
+        let dir = std::env::temp_dir().join(format!("identra-wait-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        canvas::save(
+            &dir,
+            &Canvas {
+                nodes: vec![Node {
+                    id: "b".into(),
+                    kind: "codex".into(),
+                    x: 0.0,
+                    y: 0.0,
+                    width: 480.0,
+                    height: 320.0,
+                    title: "Tests".into(),
+                    cwd: None,
+                }],
+                ..Canvas::default()
+            },
+        )
+        .unwrap();
+        let bus = bus_in(dir.clone());
+        let text = |v: &Value| v["content"][0]["text"].as_str().unwrap().to_string();
+
+        // A node that was never launched is not working, so a wait on it returns rather than
+        // hanging for the full budget. Nothing to wait for is a normal answer, not an error.
+        let out = call_tool(
+            &bus,
+            "a",
+            Some(&json!({"name": "wait_for_nodes", "arguments": {"nodeIds": ["b"], "timeoutSec": 5}})),
+        )
+        .await;
+        assert_eq!(out["isError"], false);
+        assert!(text(&out).contains("done waiting"), "got: {}", text(&out));
+        assert!(
+            text(&out).contains("Tests"),
+            "it names the node, not the id"
+        );
+        // The one thing this must never imply. Quiet means quiet, and an agent that reads it as
+        // "the work is good" will build on something nobody checked.
+        assert!(text(&out).contains("not the same as finished well"));
+
+        let status = call_tool(
+            &bus,
+            "a",
+            Some(&json!({"name": "get_node_status", "arguments": {"nodeId": "b"}})),
+        )
+        .await;
+        assert!(text(&status).contains("Tests is not running"));
+
+        // A wait with nothing to wait on is a caller mistake worth saying out loud.
+        let empty = call_tool(
+            &bus,
+            "a",
+            Some(&json!({"name": "wait_for_nodes", "arguments": {"nodeIds": []}})),
+        )
+        .await;
+        assert_eq!(empty["isError"], true);
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
