@@ -67,6 +67,9 @@ jobs:
   bundle:
     needs: [check, check-macos]
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    permissions:
+      # Needed to create the release and attach the bundles to it.
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -74,10 +77,14 @@ jobs:
           - os: ubuntu-latest
             target: ""
             name: linux
+            bundles: target/release/bundle
           # Apple Silicon and Intel as one binary, so there is one download and no way to pick wrong.
           - os: macos-latest
             target: universal-apple-darwin
             name: macos
+            # A --target build nests its bundles under the triple rather than release/, so the path
+            # differs per matrix leg and is not something to hardcode once and get wrong.
+            bundles: target/universal-apple-darwin/release/bundle
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -97,14 +104,31 @@ jobs:
         working-directory: apps/identra-desktop/frontend
         run: bun install --frozen-lockfile
       - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: apps/identra-desktop
           args: ${{ matrix.target && format('--target {0}', matrix.target) || '' }}
+          # A tag publishes, a manual run just builds. Giving these empty on a dispatch is what
+          # keeps tauri-action from cutting a release named after whatever branch I ran it from.
+          tagName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+          releaseName: ${{ startsWith(github.ref, 'refs/tags/v') && format('Identra {0}', github.ref_name) || '' }}
+          # Draft, so a release is something I choose to publish rather than something a tag does to
+          # me. Both legs write into the same draft, so it is only complete once Linux and macOS have
+          # both landed, and I would rather see that than ship whichever finished first.
+          releaseDraft: true
+      # Keep the bundles on the run itself as well. A draft release is the download people get; this
+      # is what I look at when a build is fine and a tag is not, and it is the only artifact a
+      # workflow_dispatch produces at all.
       - uses: actions/upload-artifact@v4
         with:
           name: identra-${{ matrix.name }}
           path: |
-            target/release/bundle/appimage/*.AppImage
-            target/release/bundle/deb/*.deb
-            target/universal-apple-darwin/release/bundle/dmg/*.dmg
-          if-no-files-found: warn
+            ${{ matrix.bundles }}/appimage/*.AppImage
+            ${{ matrix.bundles }}/deb/*.deb
+            ${{ matrix.bundles }}/rpm/*.rpm
+            ${{ matrix.bundles }}/dmg/*.dmg
+          # error, not warn. Each leg now looks only where its own bundles land, so finding nothing
+          # means this OS built nothing, which is exactly the failure that shipped a green run with
+          # no Mac download attached to it. Never let that be a warning again.
+          if-no-files-found: error
