@@ -5,6 +5,11 @@ node_modules/
 dist/
 .identra/
 scripts/local/
+# Identra writes these agent guides into whatever folder is the active workspace. Opening this repo
+# as a workspace would drop them here, and they are per workspace runtime files, never source.
+AGENTS.md
+CLAUDE.md
+.mcp.json
 .env
 .env.*
 !.env.example
