@@ -53,12 +53,20 @@ impl TerminalManager {
     }
 
     /// Spawn `cmd args` in a PTY under `id`. Reusing an existing `id` kills the old one first.
+    ///
+    /// `env` sets extra process env on top of the inherited environment (the builder does not clear
+    /// it, so the CLI still finds the user's login). Identra uses it to hand each node its own bus
+    /// bearer without the token ever passing through the frontend.
+    // Every argument here is a distinct PTY spawn knob (command, args, cwd, env, size). Folding
+    // them into a struct would add a type for two call sites without making either clearer.
+    #[allow(clippy::too_many_arguments)]
     pub fn start(
         &self,
         id: String,
         cmd: &str,
         args: &[String],
         cwd: Option<&str>,
+        env: &[(String, String)],
         rows: u16,
         cols: u16,
     ) -> Result<(), Error> {
@@ -75,6 +83,9 @@ impl TerminalManager {
 
         let mut builder = CommandBuilder::new(cmd);
         builder.args(args);
+        for (key, value) in env {
+            builder.env(key, value);
+        }
         if let Some(dir) = cwd {
             builder.cwd(dir);
         }
@@ -219,8 +230,16 @@ mod tests {
             let _ = tx.send(out);
         }));
 
-        mgr.start("t1".into(), "echo", &["hello-identra".into()], None, 24, 80)
-            .expect("spawn echo");
+        mgr.start(
+            "t1".into(),
+            "echo",
+            &["hello-identra".into()],
+            None,
+            &[],
+            24,
+            80,
+        )
+        .expect("spawn echo");
 
         // Live sink delivers the bytes.
         let mut live = Vec::new();
