@@ -126,6 +126,70 @@ pub fn create(root: &Path, title: &str) -> io::Result<WorkspaceMeta> {
     })
 }
 
+/// Give a workspace a new name, moving its folder to match.
+///
+/// The folder is the id, so a rename is a move, and a move is the part that can go wrong: the
+/// canvas, the memory, and the bus state all live in that directory. I rename the directory first
+/// and only write the new title once it lands, so a failed move leaves a workspace that is intact
+/// and still called the old thing, rather than one whose name and location disagree.
+///
+/// Returns the workspace at its new home. The caller must repoint anything holding the old path.
+pub fn rename(root: &Path, slug: &str, title: &str) -> io::Result<WorkspaceMeta> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a workspace needs a name",
+        ));
+    }
+    let from = root.join(slug);
+    if !canvas::canvas_path(&from).is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("no workspace named {slug}"),
+        ));
+    }
+
+    // Renaming to a name that slugs the same (Auth Refactor -> auth refactor) must not try to move
+    // a directory onto itself, and must not dedup itself to auth-refactor-2 either.
+    let wanted = slugify(title);
+    let to_slug = if wanted == slug {
+        slug.to_string()
+    } else {
+        free_slug(root, &wanted)
+    };
+    let to = root.join(&to_slug);
+    if to_slug != slug {
+        std::fs::rename(&from, &to)?;
+    }
+
+    let mut board = canvas::load(&to);
+    board.title = title.to_string();
+    canvas::save(&to, &board)?;
+    Ok(WorkspaceMeta {
+        slug: to_slug,
+        title: title.to_string(),
+        path: to.display().to_string(),
+    })
+}
+
+/// Delete a workspace and everything in it.
+///
+/// This takes the user's files with it, not just the canvas: the workspace folder is where the
+/// agents were working. The caller is responsible for asking first, and for saying that plainly.
+/// I refuse anything that is not a workspace, so a wrong slug cannot turn into a recursive delete
+/// of something else.
+pub fn delete(root: &Path, slug: &str) -> io::Result<()> {
+    let path = root.join(slug);
+    if !canvas::canvas_path(&path).is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("no workspace named {slug}"),
+        ));
+    }
+    std::fs::remove_dir_all(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,6 +201,81 @@ mod tests {
         assert_eq!(slugify("../../etc/passwd"), "etc-passwd"); // no traversal survives
         assert_eq!(slugify(""), DEFAULT_TITLE);
         assert_eq!(slugify("!!!"), DEFAULT_TITLE);
+    }
+
+    #[test]
+    fn renaming_moves_the_folder_and_keeps_everything_in_it() {
+        let root = std::env::temp_dir().join(format!("identra-ws-rn-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        let made = create(&root, "untitled-workspace").unwrap();
+        // Something of the user's, in the workspace. A rename must not lose it: the folder is where
+        // the agents were working, not just where a layout file lives.
+        std::fs::write(root.join(&made.slug).join("notes.txt"), "keep me").unwrap();
+
+        let renamed = rename(&root, &made.slug, "Auth refactor").unwrap();
+        assert_eq!(renamed.slug, "auth-refactor");
+        assert_eq!(renamed.title, "Auth refactor");
+        assert!(
+            !root.join("untitled-workspace").exists(),
+            "the old folder is gone"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("auth-refactor").join("notes.txt")).unwrap(),
+            "keep me",
+            "the user's files moved with it"
+        );
+        assert_eq!(
+            canvas::load(&root.join("auth-refactor")).title,
+            "Auth refactor"
+        );
+
+        // A name that slugs to where it already is must not move onto itself or dedup itself.
+        let same = rename(&root, "auth-refactor", "Auth Refactor").unwrap();
+        assert_eq!(same.slug, "auth-refactor");
+        assert_eq!(same.title, "Auth Refactor");
+
+        // A rename that collides with a real other workspace gets its own folder, never a clobber.
+        create(&root, "docs").unwrap();
+        let moved = rename(&root, "auth-refactor", "Docs").unwrap();
+        assert_eq!(moved.slug, "docs-2");
+        assert!(
+            root.join("docs").exists(),
+            "the workspace already called docs survives"
+        );
+
+        assert!(rename(&root, "nope", "x").is_err());
+        assert!(rename(&root, "docs", "   ").is_err());
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn deleting_takes_the_workspace_and_refuses_anything_else() {
+        let root = std::env::temp_dir().join(format!("identra-ws-del-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        // A folder in the root that is not a workspace. A wrong slug must not turn delete into a
+        // recursive remove of whatever happens to be sitting there.
+        std::fs::create_dir_all(root.join("not-a-workspace")).unwrap();
+        std::fs::write(root.join("not-a-workspace").join("important"), "x").unwrap();
+
+        create(&root, "scratch").unwrap();
+        assert!(delete(&root, "not-a-workspace").is_err());
+        assert!(root.join("not-a-workspace").join("important").exists());
+        assert!(delete(&root, "../..").is_err());
+
+        delete(&root, "scratch").unwrap();
+        assert!(!root.join("scratch").exists());
+        assert_eq!(list(&root).len(), 0);
+        assert!(
+            delete(&root, "scratch").is_err(),
+            "deleting twice is an error, not a no op"
+        );
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

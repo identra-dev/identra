@@ -118,6 +118,16 @@ export const workspaceCreate = (title?: string) =>
 export const workspaceOpen = (slug: string) =>
   invoke<Canvas>("workspace_open", { slug });
 
+// Renaming moves the folder, so the returned meta carries the new slug and path. Anything holding
+// the old one is stale.
+export const workspaceRename = (slug: string, title: string) =>
+  invoke<WorkspaceMeta>("workspace_rename", { slug, title });
+
+// Takes the folder and everything in it, which is the user's work, not just a layout file. Ask
+// first.
+export const workspaceDelete = (slug: string) =>
+  invoke<void>("workspace_delete", { slug });
+
 export const onOutput = (cb: (e: OutputEvent) => void): Promise<UnlistenFn> =>
   listen<OutputEvent>("terminal://output", (evt) => cb(evt.payload));
 

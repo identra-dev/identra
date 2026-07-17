@@ -328,21 +328,6 @@ body {
   font-size: 12px;
 }
 
-/* Which workspace you are in, top left, out of the way of the canvas. */
-.identra-workspace {
-  position: fixed;
-  top: 12px;
-  left: 12px;
-  background: rgba(44, 44, 44, 0.86);
-  border: 1px solid var(--panel-edge);
-  border-radius: 6px;
-  padding: 5px 10px;
-  font-size: 12px;
-  color: var(--text);
-  backdrop-filter: blur(6px);
-  pointer-events: none;
-}
-
 /* A note an agent left for its human. Deliberately unlike a node: no chrome, no ports, nothing to
    wire. Yaru's paper yellow so it reads as a sticky on the desk, not another window. */
 .identra-note {
@@ -561,4 +546,141 @@ body {
   background: var(--bg);
   font-size: 12.5px;
   line-height: 1.5;
+}
+
+/* The workspace control: which one you are in, and the way to any other. */
+.identra-ws {
+  position: relative;
+}
+.identra-ws__current,
+.identra-ws__edit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(44, 44, 44, 0.86);
+  border: 1px solid var(--panel-edge);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+}
+.identra-ws__current:hover {
+  border-color: var(--yaru-orange);
+}
+.identra-ws__edit {
+  cursor: text;
+  min-width: 180px;
+}
+.identra-ws__edit:focus {
+  outline: none;
+  border-color: var(--yaru-orange);
+}
+.identra-ws__caret {
+  font-size: 9px;
+  color: #8f8f8f;
+}
+.identra-ws__menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  width: 300px;
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  padding: 6px;
+  z-index: 20;
+}
+.identra-ws__section {
+  padding: 6px 8px 4px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #8f8f8f;
+}
+.identra-ws__list {
+  list-style: none;
+  margin: 0 0 6px;
+  padding: 0;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.identra-ws__row {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+}
+.identra-ws__pick {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  padding: 6px 8px;
+  font: inherit;
+  color: var(--text);
+  cursor: pointer;
+}
+.identra-ws__pick:hover {
+  background: var(--header);
+}
+/* The one you are in is marked, so the list is never ambiguous about where you are. */
+.identra-ws__pick[data-on="true"] {
+  background: var(--header);
+  box-shadow: inset 2px 0 0 var(--yaru-orange);
+}
+.identra-ws__name {
+  font-size: 12.5px;
+}
+.identra-ws__path {
+  font-size: 10.5px;
+  color: #8f8f8f;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.identra-ws__del {
+  background: transparent;
+  border: 0;
+  color: #6b6b6b;
+  font-size: 15px;
+  padding: 0 7px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.identra-ws__del:hover {
+  background: #5c1a13;
+  color: #f66151;
+}
+.identra-ws__actions {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--panel-edge);
+  padding-top: 6px;
+}
+.identra-ws__actions button {
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  padding: 7px 8px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+}
+.identra-ws__actions button:hover {
+  background: var(--header);
+}
+.identra-ws__error {
+  margin: 6px 8px 2px;
+  font-size: 11px;
+  color: #f66151;
 }

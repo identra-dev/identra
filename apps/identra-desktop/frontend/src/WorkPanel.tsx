@@ -52,7 +52,10 @@ export default function WorkPanel({ onClose }: { onClose: () => void }) {
             data-on={tab === "tasks"}
             onClick={() => setTab("tasks")}
           >
-            Work {tasks.length > 0 && <span>{tasks.filter((t) => !t.done).length}</span>}
+            Work{" "}
+            {tasks.length > 0 && (
+              <span>{tasks.filter((t) => !t.done).length}</span>
+            )}
           </button>
           <button
             className="identra-panel__tab"
@@ -62,7 +65,11 @@ export default function WorkPanel({ onClose }: { onClose: () => void }) {
             Memory {memories.length > 0 && <span>{memories.length}</span>}
           </button>
         </div>
-        <button className="identra-panel__close" onClick={onClose} title="Close">
+        <button
+          className="identra-panel__close"
+          onClick={onClose}
+          title="Close"
+        >
           &times;
         </button>
       </header>
@@ -86,7 +93,9 @@ export default function WorkPanel({ onClose }: { onClose: () => void }) {
                 <div className="identra-task__what">{t.description}</div>
                 {/* Who has it and what is holding it up are the two things you actually scan for. */}
                 {t.claimedBy && !t.done && (
-                  <div className="identra-task__meta">taken by {t.claimedBy}</div>
+                  <div className="identra-task__meta">
+                    taken by {t.claimedBy}
+                  </div>
                 )}
                 {t.blockedBy.length > 0 && (
                   <div className="identra-task__meta">

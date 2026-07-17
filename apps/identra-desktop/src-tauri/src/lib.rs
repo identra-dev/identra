@@ -223,6 +223,40 @@ fn workspace_open(state: State<AppState>, slug: String) -> Result<Canvas, String
     Ok(canvas::load(&path))
 }
 
+/// Rename a workspace, which moves its folder. If it was the active one, follow it: the old path
+/// no longer exists, and every canvas save and every agent launch reads that path.
+#[tauri::command]
+fn workspace_rename(
+    state: State<AppState>,
+    slug: String,
+    title: String,
+) -> Result<WorkspaceMeta, String> {
+    let root = workspaces_root()?;
+    let was_active = state.dir() == root.join(&slug);
+    let meta = workspace::rename(&root, &slug, &title).map_err(|e| e.to_string())?;
+    if was_active {
+        state.activate(PathBuf::from(&meta.path))?;
+    }
+    Ok(meta)
+}
+
+/// Delete a workspace and everything in it. The window asks first: this takes the user's files, not
+/// just the canvas.
+///
+/// Any agent still running in it is killed first. Leaving a PTY alive with its working directory
+/// deleted gives an agent that fails every command for a reason it cannot see.
+#[tauri::command]
+fn workspace_delete(state: State<AppState>, slug: String) -> Result<(), String> {
+    let root = workspaces_root()?;
+    let path = root.join(&slug);
+    if state.dir() == path {
+        for id in state.manager.ids() {
+            let _ = state.manager.kill(&id);
+        }
+    }
+    workspace::delete(&root, &slug).map_err(|e| e.to_string())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
@@ -291,7 +325,9 @@ pub fn run() {
             memory_list,
             workspace_list,
             workspace_create,
-            workspace_open
+            workspace_open,
+            workspace_rename,
+            workspace_delete
         ])
         .run(tauri::generate_context!())
         .expect("error while running Identra");

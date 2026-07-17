@@ -20,6 +20,7 @@ import BrowserNode from "./BrowserNode";
 import NoteNode from "./NoteNode";
 import WorkspacePicker from "./WorkspacePicker";
 import WorkPanel from "./WorkPanel";
+import WorkspaceMenu from "./WorkspaceMenu";
 import { AgentIcon } from "./icons";
 import {
   canvasCommandResult,
@@ -338,9 +339,20 @@ export default function App() {
       )}
 
       <div className="identra-topbar">
-        <div className="identra-workspace" title={workspace.path}>
-          {workspace.title}
-        </div>
+        <WorkspaceMenu
+          workspace={workspace}
+          onOpen={(w) => void openWorkspace(w)}
+          onRenamed={setWorkspace}
+          onDeleted={() => {
+            // Back to the picker. The workspace under us is gone, so there is nothing to show and
+            // nothing to save into.
+            setWorkspace(null);
+            setNodes([]);
+            setEdges([]);
+            nodesRef.current = [];
+            edgesRef.current = [];
+          }}
+        />
         <button
           className="identra-topbar__btn"
           data-on={panelOpen}
