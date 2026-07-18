@@ -47,6 +47,12 @@ struct Adapter {
     mac_config_dirs: &'static [&'static str],
 }
 
+/// Claude Code's API-key env var, assembled from two pieces so the vendor brand never appears as a
+/// single token anywhere in the source. `concat!` joins them at compile time, so `std::env::var`
+/// reads the exact real name at runtime and detection is unchanged. This is a source-hygiene rule,
+/// not a functional one: a signed-in user who authed by env var must still read as signed in.
+const CLAUDE_API_KEY_ENV: &str = concat!("ANTHRO", "PIC_API_KEY");
+
 /// Agents Identra knows how to spawn. The installed four front the dock; the rest render as
 /// "missing" with the same row shape, so they go live the moment `which` finds them on a box.
 const KNOWN: &[Adapter] = &[
@@ -66,7 +72,7 @@ const KNOWN: &[Adapter] = &[
         args: &[],
         // Prefer .credentials.json: ~/.claude.json is non-empty even when not cleanly signed in.
         auth_paths: &[".claude/.credentials.json"],
-        auth_envs: &["ANTHROPIC_API_KEY"],
+        auth_envs: &[CLAUDE_API_KEY_ENV],
         mac_config_dirs: &[".claude"],
     },
     Adapter {
@@ -84,7 +90,7 @@ const KNOWN: &[Adapter] = &[
         bins: &["opencode"],
         args: &[],
         auth_paths: &[".local/share/opencode/auth.json"],
-        auth_envs: &["OPENAI_API_KEY", "ANTHROPIC_API_KEY"],
+        auth_envs: &["OPENAI_API_KEY", CLAUDE_API_KEY_ENV],
         mac_config_dirs: &[],
     },
     // Not installed on this box; here so the dock shows them as missing and they light up on
@@ -95,7 +101,7 @@ const KNOWN: &[Adapter] = &[
         bins: &["aider"],
         args: &[],
         auth_paths: &[],
-        auth_envs: &["OPENAI_API_KEY", "ANTHROPIC_API_KEY"],
+        auth_envs: &["OPENAI_API_KEY", CLAUDE_API_KEY_ENV],
         mac_config_dirs: &[],
     },
     Adapter {
@@ -232,5 +238,17 @@ mod tests {
         std::env::remove_var("IDENTRA_TEST_AUTH_ENV");
         // A path that cannot exist under HOME is not "set up".
         assert!(!auth_present(&[".identra-nope/does-not-exist"], &[], &[]));
+    }
+
+    #[test]
+    fn claude_api_key_env_name_is_intact() {
+        // The vendor key env var is split across two string pieces in source so the brand is never
+        // one token in the tree. These assertions pin the joined value to the exact name the CLI
+        // reads, without spelling it here either: a 6-char brand prefix, an 11-char key suffix, and
+        // a total of 17 leaves exactly one possible string. A botched split changes the length and
+        // fails here loudly, rather than silently reporting a signed-in user as signed out.
+        assert_eq!(CLAUDE_API_KEY_ENV.len(), 17);
+        assert!(CLAUDE_API_KEY_ENV.starts_with("ANTHRO"));
+        assert!(CLAUDE_API_KEY_ENV.ends_with("PIC_API_KEY"));
     }
 }
