@@ -189,7 +189,7 @@ Identra uses a `justfile` for everything. Run `just` to list them.
 | `just test` | Run the Rust and web test suites |
 | `just fmt` | Format Rust and web code |
 | `just lint` | Clippy and the web linter, warnings fail |
-| `just check` | Format, lint, test, and the trace gate. This is what I run before a commit |
+| `just check` | Format, lint, and test. This is what I run before a commit |
 | `just doctor` | Check your machine has the tools to build and run |
 
 ## Status
