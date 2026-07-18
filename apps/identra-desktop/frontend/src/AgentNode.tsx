@@ -1,10 +1,5 @@
 import { memo, useEffect, useRef, useState, type CSSProperties } from "react";
-import {
-  Handle,
-  Position,
-  useReactFlow,
-  type NodeProps,
-} from "@xyflow/react";
+import { Handle, Position, useReactFlow, type NodeProps } from "@xyflow/react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import {
@@ -158,12 +153,23 @@ function AgentNodeImpl({ id, data }: NodeProps) {
       ready = true;
     })();
 
-    const onData = term.onData((d) => void terminalInput(id, d));
+    // A keystroke sent to an agent that has already exited fails at the pipe, and that is expected
+    // for a dead node, so it drops to one warning rather than an unhandled rejection. The exit line
+    // already told the user the agent is gone; there is nothing more to say and nothing to type into.
+    const onData = term.onData(
+      (d) =>
+        void terminalInput(id, d).catch((err) =>
+          console.warn(`input to ${id} dropped:`, err),
+        ),
+    );
 
     const ro = new ResizeObserver(() => {
       try {
         fit.fit();
-        void terminalResize(id, term.rows, term.cols);
+        // Same story as input: a resize racing a killed terminal rejects at the backend, and there
+        // is nothing to resize and nothing to tell the user, so it is swallowed rather than left
+        // unhandled.
+        void terminalResize(id, term.rows, term.cols).catch(() => {});
       } catch {
         /* host detached mid-resize */
       }
