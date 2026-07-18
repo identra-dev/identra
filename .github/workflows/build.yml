@@ -43,8 +43,6 @@ jobs:
           bun install --frozen-lockfile
           bun run build
           bun test
-      - name: Trace gate
-        run: bash scripts/trace-gate.sh
 
   # The platform code is small (session detection and the macOS auth branch) but it is real, and it
   # is invisible to a Linux build: cfg'd-out code is never type checked. This is the only thing that

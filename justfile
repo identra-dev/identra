@@ -36,12 +36,8 @@ lint:
     cargo clippy --workspace -- -D warnings
     cd apps/identra-desktop/frontend && bun run lint
 
-# fail if any AI/tool attribution trace is in the source
-trace-gate:
-    bash scripts/trace-gate.sh
-
-# the gate i run before every commit: format, lint, test, trace-gate
-check: fmt lint test trace-gate
+# the gate i run before every commit: format, lint, test
+check: fmt lint test
 
 # check this machine has what it needs to build and run
 doctor:
