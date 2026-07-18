@@ -427,6 +427,79 @@ body {
   color: #8f8f8f;
 }
 
+/* First run with no agent installed. Unlike the empty hint this has a button, so it takes pointer
+   events; it sits above the dock, which stays usable (the browser tile still works, and agents
+   light up here as they are found). */
+.identra-onboard {
+  position: fixed;
+  left: 50%;
+  top: 44%;
+  transform: translate(-50%, -50%);
+  width: 420px;
+  max-width: calc(100vw - 48px);
+  padding: 22px 24px;
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  text-align: center;
+  z-index: 6;
+}
+.identra-onboard__title {
+  margin: 0 0 8px;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text);
+}
+.identra-onboard__lead {
+  margin: 0 0 16px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: #a8a8a8;
+}
+.identra-onboard__agent {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  background: var(--header);
+  border-radius: 8px;
+}
+.identra-onboard__name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.identra-onboard__where {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: #c8c8c8;
+  /* A pointer at a page to install from, so make it trivial to select and copy. */
+  user-select: all;
+}
+.identra-onboard__more {
+  margin: 0 0 18px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #8f8f8f;
+}
+.identra-onboard__btn {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--yaru-orange);
+  border: none;
+  border-radius: 6px;
+  padding: 8px 18px;
+  cursor: pointer;
+}
+.identra-onboard__btn:hover {
+  filter: brightness(1.08);
+}
+
 /* Top left: which workspace, and the way into what the agents are doing. */
 .identra-topbar {
   position: fixed;
@@ -748,12 +821,14 @@ body {
   100% {
     box-shadow:
       0 8px 24px rgba(0, 0, 0, 0.35),
-      0 0 10px 1px color-mix(in srgb, var(--aura, var(--yaru-orange)) 20%, transparent);
+      0 0 10px 1px
+        color-mix(in srgb, var(--aura, var(--yaru-orange)) 20%, transparent);
   }
   50% {
     box-shadow:
       0 8px 24px rgba(0, 0, 0, 0.35),
-      0 0 19px 3px color-mix(in srgb, var(--aura, var(--yaru-orange)) 36%, transparent);
+      0 0 19px 3px
+        color-mix(in srgb, var(--aura, var(--yaru-orange)) 36%, transparent);
   }
 }
 .identra-node[data-state="running"] {
@@ -794,7 +869,8 @@ body {
     animation: none;
     box-shadow:
       0 8px 24px rgba(0, 0, 0, 0.35),
-      0 0 19px 3px color-mix(in srgb, var(--aura, var(--yaru-orange)) 36%, transparent);
+      0 0 19px 3px
+        color-mix(in srgb, var(--aura, var(--yaru-orange)) 36%, transparent);
   }
   .identra-node__dot[data-state="running"] {
     animation: none;

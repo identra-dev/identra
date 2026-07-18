@@ -63,6 +63,21 @@ export const agentsByKind = (): Promise<Map<string, AgentInfo>> => {
   return agentCache;
 };
 
+// Detection is fixed for a session on purpose, but a first-run user who installs an agent while the
+// app is open should not have to relaunch for the dock to notice. This drops the cached probe and
+// runs a fresh one; callers update their own agent state from the returned list, and the next node
+// that looks itself up will re-probe rather than read the stale map.
+export const refreshAgents = (): Promise<AgentInfo[]> => {
+  agentCache = null;
+  return detectAgents();
+};
+
+// Whether to show the first-run "install an agent" panel. True only once detection has answered and
+// every known agent is missing. The length guard matters: before the first probe resolves the list
+// is empty for a different reason, and without it the panel would flash on every launch.
+export const noAgentsInstalled = (list: AgentInfo[]): boolean =>
+  list.length > 0 && list.every((a) => !a.available);
+
 // `kind` is the agent id. The engine uses it to add that CLI's bus wiring at launch, which is the
 // only moment it can happen: every agent reads its MCP servers once, on startup.
 export const terminalStart = (

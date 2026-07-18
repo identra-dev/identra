@@ -19,6 +19,7 @@ import "@xterm/xterm/css/xterm.css";
 import AgentNode, { type AgentNodeData } from "./AgentNode";
 import BrowserNode from "./BrowserNode";
 import NoteNode from "./NoteNode";
+import Onboarding from "./Onboarding";
 import WorkspacePicker from "./WorkspacePicker";
 import WorkPanel from "./WorkPanel";
 import WorkspaceMenu from "./WorkspaceMenu";
@@ -28,7 +29,9 @@ import {
   canvasSave,
   detectAgents,
   isAdopted,
+  noAgentsInstalled,
   onCanvasCommand,
+  refreshAgents,
   terminalKill,
   workspaceOpen,
   workspaceOpenRecent,
@@ -97,6 +100,15 @@ export default function App() {
 
   useEffect(() => {
     void detectAgents().then((list) => {
+      agentsRef.current = list;
+      setAgents(list);
+    });
+  }, []);
+
+  // The first-run panel offers a recheck so a user who just installed an agent does not have to
+  // relaunch. This clears the probe cache and refreshes what both the dock and the panel read.
+  const recheckAgents = useCallback(() => {
+    void refreshAgents().then((list) => {
       agentsRef.current = list;
       setAgents(list);
     });
@@ -422,18 +434,22 @@ export default function App() {
         <Controls showInteractive={false} />
       </ReactFlow>
 
-      {/* A blank grid reads as a broken app. This says what the canvas is for and points at the one
-          thing to do next, and it goes away the moment there is anything to look at. */}
-      {nodes.length === 0 && (
-        <div className="identra-empty">
-          <p className="identra-empty__lead">This workspace is empty.</p>
-          <p className="identra-empty__hint">
-            Pick an agent from the dock below to run it here. Drop in a second
-            one and draw a wire between them, and they can split the work
-            between themselves.
-          </p>
-        </div>
-      )}
+      {/* A blank grid reads as a broken app. With no agent installed the dock is all disabled, so
+          the usual hint would point at a dock you cannot use; show the install panel instead. Both
+          go away the moment there is a node to look at. */}
+      {nodes.length === 0 &&
+        (noAgentsInstalled(agents) ? (
+          <Onboarding agents={agents} onRecheck={recheckAgents} />
+        ) : (
+          <div className="identra-empty">
+            <p className="identra-empty__lead">This workspace is empty.</p>
+            <p className="identra-empty__hint">
+              Pick an agent from the dock below to run it here. Drop in a second
+              one and draw a wire between them, and they can split the work
+              between themselves.
+            </p>
+          </div>
+        ))}
 
       <div className="identra-topbar">
         <WorkspaceMenu
