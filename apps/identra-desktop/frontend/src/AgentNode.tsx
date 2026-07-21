@@ -19,7 +19,14 @@ import { pastSnapshot } from "./reattach";
 import { AgentIcon, auraFor } from "./icons";
 
 // `kind` is the agent id (codex, claude, …); the node resolves its binary and args from it.
-export type AgentNodeData = { title: string; cwd: string | null; kind: string };
+// `seat` is stamped on at render by App when this node holds the orchestrator seat. It is not
+// persisted here: the canvas stores one seat id, and this is that fact arriving where it is drawn.
+export type AgentNodeData = {
+  title: string;
+  cwd: string | null;
+  kind: string;
+  seat?: boolean;
+};
 
 function AgentNodeImpl({ id, data }: NodeProps) {
   const nodeData = data as AgentNodeData;
@@ -225,6 +232,16 @@ function AgentNodeImpl({ id, data }: NodeProps) {
         <span className="identra-node__title">
           {nodeData.title || nodeData.kind}
         </span>
+        {nodeData.seat === true && (
+          // Named, not just coloured. A ring alone would say this node is special without saying
+          // why, and the thing worth knowing is that the command bar types in here.
+          <span
+            className="identra-node__seat"
+            title="This node holds the orchestrator seat. What you type in the command bar arrives here."
+          >
+            command center
+          </span>
+        )}
         <button
           className="identra-node__close nodrag"
           title={`Close this ${nodeData.title || nodeData.kind}`}

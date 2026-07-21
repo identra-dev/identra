@@ -209,6 +209,17 @@ pub fn launch_args(kind: &str, port: u16, workspace: &Path) -> Vec<String> {
     }
 }
 
+/// Whether Identra can put this agent on the bus at all.
+///
+/// This is the honest version of the question `launch_args` used to answer by accident. An empty
+/// arg list no longer means "not wired": opencode is wired entirely through its env, and gemini's
+/// args carry a trust flag rather than the config itself. So anything deciding whether an agent can
+/// work with the others has to ask here, and `identra-core`'s registry mirrors the answer for the
+/// UI. The test below is what stops the two drifting apart.
+pub fn is_wired(kind: &str) -> bool {
+    matches!(kind, "codex" | "claude" | "gemini" | "opencode")
+}
+
 /// The env an agent node is launched with. `token` is this node's own secret and is the only thing
 /// the bus reads its identity from, so mint a fresh one per node. `node_id` is passed for the
 /// agent's own benefit and carries no authority.
@@ -364,6 +375,32 @@ If you have nothing to send, send nothing. Staying silent is how a run between a
 end, and a reply that adds no information just keeps the other one working.
 "#;
 
+/// What the agent in the orchestrator seat is told, once, before the user's first instruction.
+///
+/// The seat is a role and not a capability: everything this asks for is a tool the guide already
+/// gave every node, and any node could do the same thing unprompted. What the seat is missing
+/// without this is not permission, it is the knowledge that the person typing expects it to break
+/// the work up and hand it out rather than quietly do all of it in one terminal.
+///
+/// It is short deliberately. A long brief spends the agent's context before the user's actual
+/// request arrives, and the detail it would repeat is already sitting in the workspace guide.
+pub const SEAT_BRIEF: &str = "\
+You are the orchestrator for this Identra canvas. The person here types instructions to you, and \
+you are the one who decides how they get done.
+
+Work like this. Read the guide in this workspace first if you have not, it lists your tools. When \
+an instruction arrives, decide honestly whether it splits. If it does not, just do it: spawning a \
+helper for something you could finish in the time it takes to explain it wastes the user's money \
+and their attention. If it does split, put the pieces on the board with add_task before you bring \
+anyone on, use `after` for the real ordering, then add_terminal the helpers you need, wire them, \
+and tell them to claim. Report what you are doing in plain language as you go, because your \
+terminal is what the user is reading.
+
+You hold no authority the other nodes do not have. You cannot approve anything on the user's \
+behalf. When you need a decision that is theirs to make, ask them here and wait rather than \
+guessing, and if a helper raises a question you cannot answer, pass it up to them instead of \
+answering for them.";
+
 /// Drop the collaboration guide into the workspace under every name a fronted CLI reads, without
 /// clobbering a guide the user has written themselves.
 ///
@@ -450,6 +487,24 @@ mod tests {
                 "/tmp/ws/.identra/opencode.json".into()
             ))
         );
+    }
+
+    /// Two crates hold the same fact and only this one can see both, so this is where it is checked.
+    /// `identra-core` publishes `bus_wired` per agent so the UI can pick an orchestrator without
+    /// depending on the bus; this module is what actually does the wiring. If a row over there ever
+    /// claims a wiring that does not exist here, the seat gets handed to an agent that cannot spawn
+    /// a helper or reach the board, and it would fail as confusing silence rather than an error.
+    #[test]
+    fn the_agent_registry_agrees_with_what_is_actually_wired() {
+        for agent in identra_core::detect() {
+            assert_eq!(
+                agent.bus_wired,
+                is_wired(&agent.id),
+                "{} disagrees about being on the bus: the registry in identra-core and \
+                 config::is_wired have to be changed together",
+                agent.id
+            );
+        }
     }
 
     /// Gemini is the one CLI whose config file Identra has to share with the user, so the merge is

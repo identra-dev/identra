@@ -23,6 +23,14 @@ pub struct AgentInfo {
     pub cmd: String,
     /// Interactive launch args (most take none; a few, like goose, need a subcommand).
     pub args: Vec<String>,
+    /// Whether Identra knows how to put this agent on the context bus.
+    ///
+    /// This is the difference between an agent that can run in a node and one that can work with
+    /// the others, and it is the capability the orchestrator seat is picked on. `identra-mcp`'s
+    /// `config::is_wired` is the thing that actually does the wiring, and a test over there asserts
+    /// the two agree, because a row here claiming a wiring that does not exist would put a helpless
+    /// agent in the seat.
+    pub bus_wired: bool,
 }
 
 /// One agent the dock can offer. A row of facts, no code branch: the per-CLI quirks (extra
@@ -45,6 +53,8 @@ struct Adapter {
     /// directory is the only on-disk evidence left. It is a weaker signal than a creds file, and it
     /// is the honest one available without reading a Keychain we have no business opening.
     mac_config_dirs: &'static [&'static str],
+    /// Identra knows how to hand this agent the bus at launch. See [`AgentInfo::bus_wired`].
+    bus_wired: bool,
 }
 
 /// Claude Code's API-key env var, assembled from two pieces so the vendor brand never appears as a
@@ -63,6 +73,7 @@ const KNOWN: &[Adapter] = &[
         args: &[],
         auth_paths: &[".codex/auth.json"],
         auth_envs: &["OPENAI_API_KEY", "CODEX_API_KEY"],
+        bus_wired: true,
         mac_config_dirs: &[".codex"],
     },
     Adapter {
@@ -73,6 +84,7 @@ const KNOWN: &[Adapter] = &[
         // Prefer .credentials.json: ~/.claude.json is non-empty even when not cleanly signed in.
         auth_paths: &[".claude/.credentials.json"],
         auth_envs: &[CLAUDE_API_KEY_ENV],
+        bus_wired: true,
         mac_config_dirs: &[".claude"],
     },
     Adapter {
@@ -82,6 +94,7 @@ const KNOWN: &[Adapter] = &[
         args: &[],
         auth_paths: &[".gemini/oauth_creds.json"],
         auth_envs: &["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+        bus_wired: true,
         mac_config_dirs: &[],
     },
     Adapter {
@@ -91,6 +104,7 @@ const KNOWN: &[Adapter] = &[
         args: &[],
         auth_paths: &[".local/share/opencode/auth.json"],
         auth_envs: &["OPENAI_API_KEY", CLAUDE_API_KEY_ENV],
+        bus_wired: true,
         mac_config_dirs: &[],
     },
     // Not installed on this box; here so the dock shows them as missing and they light up on
@@ -102,6 +116,7 @@ const KNOWN: &[Adapter] = &[
         args: &[],
         auth_paths: &[],
         auth_envs: &["OPENAI_API_KEY", CLAUDE_API_KEY_ENV],
+        bus_wired: false,
         mac_config_dirs: &[],
     },
     Adapter {
@@ -112,6 +127,7 @@ const KNOWN: &[Adapter] = &[
         // Creds live in the OS keyring; a configured provider is the strongest on-disk signal.
         auth_paths: &[".config/goose/config.yaml"],
         auth_envs: &["GOOSE_PROVIDER"],
+        bus_wired: false,
         mac_config_dirs: &[".config/goose"],
     },
     Adapter {
@@ -121,6 +137,7 @@ const KNOWN: &[Adapter] = &[
         args: &[],
         auth_paths: &[".config/amp/settings.json"],
         auth_envs: &["AMP_API_KEY"],
+        bus_wired: false,
         mac_config_dirs: &[],
     },
     Adapter {
@@ -130,6 +147,7 @@ const KNOWN: &[Adapter] = &[
         args: &[],
         auth_paths: &[".cursor/cli-config.json"],
         auth_envs: &[],
+        bus_wired: false,
         mac_config_dirs: &[],
     },
 ];
@@ -156,7 +174,30 @@ fn row_to_info(a: &Adapter) -> AgentInfo {
         logged_in: available && auth_present(a.auth_paths, a.auth_envs, a.mac_config_dirs),
         cmd,
         args: a.args.iter().map(|s| (*s).to_string()).collect(),
+        bus_wired: a.bus_wired,
     }
+}
+
+/// The agent to put in the orchestrator seat by default, or `None` when nothing here can hold it.
+///
+/// The seat has to be a role rather than a brand, so this ranks on what an agent can actually do
+/// here and never on which one it is. Two capabilities decide it, in this order:
+///
+/// 1. **It is wired to the bus.** An orchestrator that cannot spawn a helper, wire it, or put work
+///    on the board is not an orchestrator, it is a chat window. This is the one hard requirement.
+/// 2. **It looks signed in.** Between two wired agents, the one with credentials will get further
+///    than the one that will stop at a login prompt on its first instruction.
+///
+/// Ties fall back to the order of the registry above, which is a curation rather than a ranking:
+/// somebody has to be first, and the user reassigns the seat whenever they disagree. No vendor is
+/// named in this function, and none should ever be.
+pub fn best_orchestrator(agents: &[AgentInfo]) -> Option<&AgentInfo> {
+    // min_by_key rather than max, because it keeps the first of equal keys and max keeps the last.
+    // Registry order is the documented tiebreak, so the ranking has to be inverted to preserve it.
+    agents
+        .iter()
+        .filter(|a| a.available && a.bus_wired)
+        .min_by_key(|a| u8::from(!a.logged_in))
 }
 
 /// True if any auth env is set and non-empty, or any HOME-relative auth path exists and is
@@ -238,6 +279,62 @@ mod tests {
         std::env::remove_var("IDENTRA_TEST_AUTH_ENV");
         // A path that cannot exist under HOME is not "set up".
         assert!(!auth_present(&[".identra-nope/does-not-exist"], &[], &[]));
+    }
+
+    /// A fixture built by hand rather than from `detect()`, because the point is to pin the ranking
+    /// rule, and what happens to be installed on the machine running the tests is not that.
+    fn agent(id: &str, available: bool, logged_in: bool, bus_wired: bool) -> AgentInfo {
+        AgentInfo {
+            id: id.into(),
+            name: id.into(),
+            path: String::new(),
+            available,
+            logged_in,
+            cmd: id.into(),
+            args: Vec::new(),
+            bus_wired,
+        }
+    }
+
+    #[test]
+    fn the_seat_goes_to_capability_and_never_to_a_brand() {
+        // Wired but signed out loses to wired and signed in, whatever order they arrive in.
+        let list = vec![
+            agent("first-wired-signed-out", true, false, true),
+            agent("second-wired-signed-in", true, true, true),
+        ];
+        assert_eq!(
+            best_orchestrator(&list).map(|a| a.id.as_str()),
+            Some("second-wired-signed-in")
+        );
+
+        // An agent with no bus wiring cannot orchestrate at all, so a signed-in one still loses to
+        // a wired one that is only installed. This is the requirement that makes the seat a role.
+        let list = vec![
+            agent("unwired-signed-in", true, true, false),
+            agent("wired-signed-out", true, false, true),
+        ];
+        assert_eq!(
+            best_orchestrator(&list).map(|a| a.id.as_str()),
+            Some("wired-signed-out")
+        );
+
+        // Equal on both capabilities, so registry order decides and the first one wins. max_by_key
+        // would quietly hand this to the last, which is why the ranking is inverted in there.
+        let list = vec![
+            agent("earlier", true, true, true),
+            agent("later", true, true, true),
+        ];
+        assert_eq!(
+            best_orchestrator(&list).map(|a| a.id.as_str()),
+            Some("earlier")
+        );
+
+        // Nothing installed, or nothing wired, means there is no seat to offer. The caller has to
+        // handle that rather than being handed an agent that cannot run.
+        assert!(best_orchestrator(&[]).is_none());
+        assert!(best_orchestrator(&[agent("missing", false, true, true)]).is_none());
+        assert!(best_orchestrator(&[agent("unwired", true, true, false)]).is_none());
     }
 
     #[test]

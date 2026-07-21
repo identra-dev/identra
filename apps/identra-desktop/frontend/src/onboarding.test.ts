@@ -9,6 +9,7 @@ const agent = (id: string, available: boolean): AgentInfo => ({
   logged_in: false,
   cmd: id,
   args: [],
+  bus_wired: true,
 });
 
 test("the install panel shows only once detection ran and every agent is missing", () => {

@@ -1828,6 +1828,7 @@ mod tests {
             }],
             viewport: Default::default(),
             title: "test".into(),
+            seat: None,
         };
         canvas::save(&dir, &canvas).unwrap();
 

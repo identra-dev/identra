@@ -225,6 +225,99 @@ body {
   border: 1px solid var(--panel-edge);
   backdrop-filter: blur(8px);
 }
+/* The command center bar, sitting directly above the dock and sharing its shape so the two read as
+   one surface. It is wider than the dock on purpose: the dock is a row of buttons, this is where a
+   sentence goes, and an input that looks like a search box invites two words instead of a task. */
+.identra-cmd {
+  position: fixed;
+  left: 50%;
+  bottom: 110px;
+  transform: translateX(-50%);
+  width: min(720px, calc(100vw - 48px));
+  padding: 8px;
+  border-radius: 14px;
+  background: rgba(44, 44, 44, 0.9);
+  border: 1px solid var(--panel-edge);
+  backdrop-filter: blur(8px);
+}
+.identra-cmd__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.identra-cmd__label {
+  flex: none;
+  padding-left: 6px;
+  font-size: 11px;
+  color: #9a9a9a;
+  white-space: nowrap;
+  /* The seat's name can be long and it is the least important thing in the row, so it gives way
+     before the input does. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 34%;
+}
+.identra-cmd__input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 9px;
+  border: 1px solid var(--panel-edge);
+  background: #242424;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+.identra-cmd__input:focus {
+  outline: none;
+  border-color: var(--state-attention);
+}
+.identra-cmd__input:disabled {
+  opacity: 0.6;
+}
+.identra-cmd__send {
+  flex: none;
+  padding: 8px 14px;
+  border-radius: 9px;
+  border: 0;
+  background: var(--yaru-orange);
+  color: #ffffff;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.identra-cmd__send:disabled {
+  background: #5e5c64;
+  cursor: default;
+}
+.identra-cmd__state {
+  margin: 6px 6px 0;
+  font-size: 11px;
+  color: #9a9a9a;
+}
+/* A failure here is the user's own instruction not arriving anywhere, so it is the one state in
+   this bar that is allowed to be loud. */
+.identra-cmd__state[data-kind="failed"] {
+  color: #f66151;
+}
+
+/* The seat marker on a node. The aubergine accent, matching the command bar's focus ring, because
+   the two are the same thing seen from either end: this is the node that bar types into. */
+.react-flow__node.is-seat .identra-node {
+  border-color: var(--state-attention);
+}
+.identra-node__seat {
+  flex: none;
+  padding: 1px 6px 2px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--state-attention) 34%, transparent);
+  border: 1px solid var(--state-attention);
+  color: #e6d4e4;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
 /* Launcher tile: icon over label, a small auth dot in the corner. The three data-states read as
    full-color (ready), dimmed (setup), greyed (missing). */
 .identra-dock__btn {

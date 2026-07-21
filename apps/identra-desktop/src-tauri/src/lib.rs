@@ -85,6 +85,24 @@ fn detect_agents() -> Vec<AgentInfo> {
     detect()
 }
 
+/// Which agent should hold the orchestrator seat on this machine, by id, or `None` when nothing
+/// installed can hold it.
+///
+/// The ranking lives in the engine rather than in the UI so it is testable and so there is one
+/// answer, and it ranks on capability rather than on brand. The UI treats this as a default it
+/// offers, never as a decision: the user reassigns the seat whenever they want.
+#[tauri::command]
+fn default_orchestrator() -> Option<String> {
+    identra_core::agents::best_orchestrator(&detect()).map(|a| a.id.clone())
+}
+
+/// The briefing the seat agent is given before the user's first instruction. The UI sends it, so
+/// the UI has to be able to read it, but the text belongs next to the workspace guide it builds on.
+#[tauri::command]
+fn seat_brief() -> &'static str {
+    identra_mcp::config::SEAT_BRIEF
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 fn terminal_start(
@@ -470,6 +488,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             detect_agents,
+            default_orchestrator,
+            seat_brief,
             terminal_start,
             terminal_input,
             terminal_resize,

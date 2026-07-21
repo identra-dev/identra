@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ReactFlow,
@@ -23,16 +23,22 @@ import Onboarding from "./Onboarding";
 import WorkspacePicker from "./WorkspacePicker";
 import WorkPanel from "./WorkPanel";
 import WorkspaceMenu from "./WorkspaceMenu";
+import CommandBar, { type DispatchState } from "./CommandBar";
 import { AgentIcon } from "./icons";
+import { composeDispatch, planSeat } from "./commandcenter";
 import {
   canvasCommandResult,
   canvasSave,
+  defaultOrchestrator,
   detectAgents,
   isAdopted,
   noAgentsInstalled,
   onCanvasCommand,
   refreshAgents,
+  seatBrief,
+  terminalInput,
   terminalKill,
+  terminalStatus,
   workspaceOpen,
   workspaceOpenRecent,
   type AgentInfo,
@@ -91,6 +97,11 @@ export default function App() {
   const nodesRef = useRef<FNode[]>([]);
   const edgesRef = useRef<FEdge[]>([]);
   const titleRef = useRef("");
+  // Which node holds the orchestrator seat. State because the canvas draws it, and a ref alongside
+  // for the same reason the nodes have one: snapshot() runs outside render and has to write the
+  // current seat, not the one from the render that scheduled the save.
+  const [seat, setSeat] = useState<string | null>(null);
+  const seatRef = useRef<string | null>(null);
   const saveTimer = useRef<number | undefined>(undefined);
   // Is the board on screen different from the board on disk. This is what the close handler asks.
   const unsaved = useRef(false);
@@ -149,6 +160,14 @@ export default function App() {
     nodesRef.current = loaded;
     edgesRef.current = canvas.edges;
     titleRef.current = canvas.title;
+    // A seat pointing at a node that is no longer here reads as no seat. That happens whenever the
+    // seat node was closed, and resolving it on load means nothing downstream has to keep asking
+    // whether the seat still exists.
+    const restored = canvas.nodes.some((n) => n.id === canvas.seat)
+      ? canvas.seat
+      : null;
+    seatRef.current = restored;
+    setSeat(restored);
     setNodes(loaded);
     setEdges(canvas.edges);
     viewport.current = canvas.viewport;
@@ -166,6 +185,7 @@ export default function App() {
       })),
       viewport: viewport.current,
       title: titleRef.current,
+      seat: seatRef.current,
     }),
     [],
   );
@@ -195,6 +215,18 @@ export default function App() {
       void saveNow();
     }, SAVE_DEBOUNCE_MS);
   }, [saveNow]);
+
+  // Moving the seat is one write. Nothing is spawned or killed here: the seat is a role, so taking
+  // it from a node leaves that node running exactly as it was, just no longer the one the command
+  // bar talks to.
+  const assignSeat = useCallback(
+    (nodeId: string | null) => {
+      seatRef.current = nodeId;
+      setSeat(nodeId);
+      scheduleSave();
+    },
+    [scheduleSave],
+  );
 
   // Closing inside the debounce window drops whatever was moved last, and dragging a node and then
   // quitting is a completely ordinary thing to do. I hold the close, flush, then let it go.
@@ -257,13 +289,19 @@ export default function App() {
   // the engine side goes: the PTY, the resumed conversation, and the node's bus credential. A node
   // that never launched has no terminal to kill and the engine says so; that is not a failure worth
   // showing anyone, but it must not become an unhandled rejection either.
-  const onNodesDelete = useCallback((deleted: FNode[]) => {
-    for (const n of deleted) {
-      void terminalKill(n.id).catch((err) => {
-        console.warn(`could not close node ${n.id} cleanly`, err);
-      });
-    }
-  }, []);
+  const onNodesDelete = useCallback(
+    (deleted: FNode[]) => {
+      for (const n of deleted) {
+        void terminalKill(n.id).catch((err) => {
+          console.warn(`could not close node ${n.id} cleanly`, err);
+        });
+      }
+      // Closing the node that held the seat vacates it. The command bar then has nothing to talk
+      // to and says so, which is better than dispatching into a node that is gone.
+      if (deleted.some((n) => n.id === seatRef.current)) assignSeat(null);
+    },
+    [assignSeat],
+  );
 
   // Returns the new node's id, because an agent that asked for this needs to be able to name it.
   const addNode = useCallback(
@@ -301,6 +339,102 @@ export default function App() {
       return id;
     },
     [scheduleSave],
+  );
+
+  // The command center. One instruction goes to one node, and that node already holds every bus
+  // tool it needs to break the work up and hand it out, so this adds no new mechanism: it is the
+  // canvas typing into a terminal on the user's behalf.
+  const [dispatch, setDispatch] = useState<DispatchState>({ kind: "idle" });
+  // The seat is briefed once per session, in front of the first instruction it receives. Kept in a
+  // ref rather than state because nothing renders from it and it must not be stale inside the async
+  // dispatch below.
+  const seatBriefed = useRef(false);
+
+  // A freshly spawned node has no PTY for a moment: AgentNode starts the CLI after it mounts and
+  // measures its terminal. Writing before that is writing into nothing, so I wait for the engine to
+  // report a terminal under this id. I poll because the alternative is a started event that nothing
+  // else needs, and the wait is short and only happens when the seat is being stood up.
+  const waitForTerminal = useCallback(async (nodeId: string) => {
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline) {
+      // A null status means no terminal under that id yet, which is the state being waited out. A
+      // rejection means the same thing from the other direction, so both just retry.
+      const status = await terminalStatus(nodeId).catch(() => null);
+      if (status !== null) return true;
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    return false;
+  }, []);
+
+  const sendToSeat = useCallback(
+    async (instruction: string) => {
+      const plan = planSeat(
+        seatRef.current,
+        nodesRef.current.map((n) => n.id),
+        await defaultOrchestrator().catch(() => null),
+      );
+
+      if (plan.kind === "unavailable") {
+        setDispatch({
+          kind: "failed",
+          error:
+            "No installed agent can run the command center here. Install one of the supported agents, then try again.",
+        });
+        return;
+      }
+
+      let nodeId: string;
+      let fresh = false;
+      if (plan.kind === "use") {
+        nodeId = plan.nodeId;
+      } else {
+        const agent = agentsRef.current.find((a) => a.id === plan.agentId);
+        setDispatch({
+          kind: "sending",
+          note: `Starting ${agent?.name ?? plan.agentId} as the orchestrator`,
+        });
+        nodeId = addNode(plan.agentId, agent?.name ?? plan.agentId);
+        assignSeat(nodeId);
+        fresh = true;
+        seatBriefed.current = false;
+        if (!(await waitForTerminal(nodeId))) {
+          setDispatch({
+            kind: "failed",
+            error: `${agent?.name ?? plan.agentId} did not start, so the instruction was not sent.`,
+          });
+          return;
+        }
+        // The CLI has a terminal but is still drawing its own first screen, and several of them
+        // discard whatever is already pending when they take over the tty. A short settle costs one
+        // beat on the first instruction of a session and saves silently losing it.
+        await new Promise((r) => setTimeout(r, 1200));
+      }
+
+      setDispatch({ kind: "sending", note: "Sending to the orchestrator" });
+      try {
+        await terminalInput(
+          nodeId,
+          composeDispatch(
+            await seatBrief(),
+            instruction,
+            fresh || !seatBriefed.current,
+          ),
+        );
+        seatBriefed.current = true;
+        setDispatch({
+          kind: "sent",
+          note: "Sent. Watch the orchestrator node for what it does next.",
+        });
+      } catch (e) {
+        // The seat node was closed, or its agent has exited. Either way the instruction did not
+        // land, and the user is the only one who can do anything about it.
+        setDispatch({
+          kind: "failed",
+          error: `That did not reach the orchestrator: ${String(e)}`,
+        });
+      }
+    },
+    [addNode, assignSeat, waitForTerminal],
   );
 
   const wire = useCallback(
@@ -400,6 +534,24 @@ export default function App() {
     };
   }, [applyCanvasCommand]);
 
+  // The seat is canvas state, not node state, so it is stamped onto the nodes at render rather than
+  // stored in them. That keeps one seat id as the only truth, and it keeps `seat` out of what gets
+  // written back to canvas.json as part of a node.
+  const flowNodes = useMemo(
+    () =>
+      nodes.map((n) =>
+        n.id === seat
+          ? { ...n, data: { ...n.data, seat: true }, className: "is-seat" }
+          : n,
+      ),
+    [nodes, seat],
+  );
+
+  const seatName =
+    seat === null
+      ? null
+      : (nodes.find((n) => n.id === seat)?.data.title ?? null);
+
   if (!workspace) {
     return <WorkspacePicker onOpen={(w) => void openWorkspace(w)} />;
   }
@@ -415,7 +567,7 @@ export default function App() {
         </div>
       )}
       <ReactFlow<FNode>
-        nodes={nodes}
+        nodes={flowNodes}
         edges={edges}
         nodeTypes={nodeTypes}
         onNodesChange={onNodesChange}
@@ -485,6 +637,18 @@ export default function App() {
       </div>
 
       {panelOpen && <WorkPanel onClose={() => setPanelOpen(false)} />}
+
+      {/* Above the dock, because the dock is how you place one agent yourself and this is how you
+          ask for the whole job to be done. Hidden until an agent exists to run it: on a machine
+          with nothing installed the onboarding panel is the thing to read, and a command bar that
+          can only fail is worse than no command bar. */}
+      {!noAgentsInstalled(agents) && (
+        <CommandBar
+          seatName={seatName}
+          state={dispatch}
+          onSubmit={(instruction) => void sendToSeat(instruction)}
+        />
+      )}
 
       <div className="identra-dock">
         {agents.map((a) => {

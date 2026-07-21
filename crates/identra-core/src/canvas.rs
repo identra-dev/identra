@@ -62,6 +62,17 @@ pub struct Canvas {
     /// so it lives with the canvas rather than in a second metadata file.
     #[serde(default = "default_title")]
     pub title: String,
+    /// The node holding the orchestrator seat, if the user has opened the command center here.
+    ///
+    /// One id on the canvas rather than a flag on a node, because "there is at most one seat" is
+    /// then a fact about the shape of the data instead of a rule some future code has to remember.
+    /// Reassigning is one write, and a seat pointing at a node the user has since closed reads as
+    /// no seat, which is what it is.
+    ///
+    /// The seat is a role, not a capability: it holds nothing the bus does not already offer every
+    /// node. It is here so the canvas can remember which node the command bar talks to.
+    #[serde(default)]
+    pub seat: Option<String>,
 }
 
 // I write Default by hand because the derived one would give an empty title, and a canvas with no
@@ -73,6 +84,10 @@ impl Default for Canvas {
             edges: Vec::new(),
             viewport: Viewport::default(),
             title: default_title(),
+            // No seat until the user opens the command center. A blank board has nothing to
+            // orchestrate, and picking an agent for them before they ask is a node they did not
+            // want and are paying for.
+            seat: None,
         }
     }
 }
@@ -216,13 +231,17 @@ mod tests {
                 zoom: 1.5,
             },
             title: "Auth refactor".into(),
+            seat: Some("n1".into()),
         };
         save(&dir, &canvas).unwrap();
         assert_eq!(load(&dir), canvas);
 
-        // A canvas.json written before `title` existed still loads, with the default name.
+        // A canvas.json written before `title` existed still loads, with the default name. The same
+        // line covers `seat`, which arrived later still: every canvas on disk today predates it, so
+        // it has to read as "no seat" rather than refusing to load.
         std::fs::write(canvas_path(&dir), r#"{"nodes":[],"edges":[]}"#).unwrap();
         assert_eq!(load(&dir).title, "untitled-workspace");
+        assert_eq!(load(&dir).seat, None);
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

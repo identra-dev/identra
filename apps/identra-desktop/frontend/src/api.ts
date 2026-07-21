@@ -11,6 +11,10 @@ export type AgentInfo = {
   logged_in: boolean;
   cmd: string;
   args: string[];
+  // Whether Identra knows how to put this agent on the context bus. It is the capability the
+  // orchestrator seat is chosen on, because an agent that cannot spawn a helper, wire it, or reach
+  // the board cannot orchestrate anything.
+  bus_wired: boolean;
 };
 
 export type CanvasNode = {
@@ -32,6 +36,10 @@ export type Canvas = {
   edges: Edge[];
   viewport: Viewport;
   title: string;
+  // The node holding the orchestrator seat, or null if the command center has not been opened here.
+  // One id on the canvas rather than a flag per node, so "at most one seat" is a fact about the
+  // shape of the data rather than a rule to remember.
+  seat: string | null;
 };
 
 // A workspace is a folder: `path` is where it really lives, `slug` is the folder name and the id,
@@ -50,6 +58,16 @@ export type OutputEvent = { id: string; seq: number; data: number[] };
 export type ExitEvent = { id: string; code: number | null };
 
 export const detectAgents = () => invoke<AgentInfo[]>("detect_agents");
+
+// Which agent the engine would put in the orchestrator seat here, by id, or null when nothing
+// installed can hold it. Ranked on capability in the engine, so the UI does not carry a second
+// opinion about it. This is a default the UI offers, never a decision it makes for the user.
+export const defaultOrchestrator = () =>
+  invoke<string | null>("default_orchestrator");
+
+// What the seat agent is told before the user's first instruction. Read from the engine rather than
+// written here so it stays next to the workspace guide it builds on.
+export const seatBrief = () => invoke<string>("seat_brief");
 
 // The install/login state is fixed for a session, so probe once and let every node share the
 // result. A node looks itself up by kind to learn which binary and args to spawn.
