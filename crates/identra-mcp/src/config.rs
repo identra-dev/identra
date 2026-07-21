@@ -1,22 +1,33 @@
 //! Getting each agent CLI onto the bus, without touching anything the user owns globally.
 //!
 //! Every CLI reads its MCP server list once, at startup, so this has to be in place before a node
-//! launches. Three facts make it clean:
+//! launches. The saving grace is that all four fronted CLIs can source a header value from an
+//! environment variable, so one config on disk serves every node while the per-node identity rides
+//! in the env Identra sets on that node's process. Only the spelling differs: claude and gemini
+//! expand `${VAR}`, codex has `env_http_headers`, and opencode interpolates `{env:VAR}`.
 //!
-//! - Each CLI can source a header value from an environment variable (claude expands `${VAR}` in
-//!   `.mcp.json`, codex has `env_http_headers`). So one config serves every node, and the per-node
-//!   identity rides in the env Identra sets on that node's process.
-//! - claude takes `--mcp-config <file>`, so I write one `.mcp.json` inside the workspace and point
-//!   claude at it. No global config, no project-trust prompt.
-//! - codex takes `-c key=value` overrides, so its bus config is launch arguments. Nothing is
-//!   written to `~/.codex/config.toml` at all, which means there is nothing to back up or restore
-//!   and no way to leave the user's own codex broken.
+//! Where each one wants that config is the part that varies, and I let each CLI have its own way
+//! rather than forcing a single mechanism:
 //!
-//! The workspace is the natural home for the `.mcp.json` because the workspace folder is already
-//! the directory the agents run in.
+//! - **codex** takes `-c key=value` overrides, so its whole bus config is launch arguments. Nothing
+//!   is written to `~/.codex/config.toml`, which means there is nothing to back up or restore and
+//!   no way to leave the user's own codex broken.
+//! - **claude** takes `--mcp-config <file>`, so I write one `.mcp.json` inside the workspace and
+//!   point claude at it. No global config, no project-trust prompt.
+//! - **opencode** reads `$OPENCODE_CONFIG`, and it *merges* that file over the user's own config
+//!   rather than replacing it (verified against the real CLI: with both set, `opencode mcp list`
+//!   reports the user's server and ours). So opencode needs no file in the user's project at all.
+//!   Identra's copy lives in `.identra/`, which is Identra's own state directory.
+//! - **gemini** has no config-path flag, so the bus has to go in the workspace's project-scope
+//!   `.gemini/settings.json`. That file is one a user may well own, so I merge into it instead of
+//!   writing over it. Gemini also disables project MCP servers in a folder it does not trust, which
+//!   would silently cost a gemini node the bus, so its launch args carry `--skip-trust`.
+//!
+//! The workspace is the natural home for these files because the workspace folder is already the
+//! directory the agents run in.
 
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// The MCP server name the agents see. Also the key in `.mcp.json` and the codex `-c` overrides.
 pub const BUS_NAME: &str = "identra-bus";
@@ -32,8 +43,35 @@ pub const TOKEN_ENV: &str = "IDENTRA_BUS_TOKEN";
 /// it is a convenience for the agent, not a credential.
 pub const NODE_ENV: &str = "IDENTRA_BUS_NODE";
 
-fn mcp_json_path(workspace: &Path) -> std::path::PathBuf {
+/// Where opencode looks for an extra config file to layer over the user's own.
+const OPENCODE_CONFIG_ENV: &str = "OPENCODE_CONFIG";
+
+fn mcp_json_path(workspace: &Path) -> PathBuf {
     workspace.join(".mcp.json")
+}
+
+/// Gemini's project-scope settings file. The path is fixed by the CLI, so this is the one config
+/// Identra has to share with a file the user may already own.
+fn gemini_settings_path(workspace: &Path) -> PathBuf {
+    workspace.join(".gemini").join("settings.json")
+}
+
+/// Identra's own opencode config, kept in the state directory rather than the project root so the
+/// user's tree stays clean. opencode is pointed at it by env, so the location is ours to choose.
+fn opencode_config_path(workspace: &Path) -> PathBuf {
+    workspace.join(".identra").join("opencode.json")
+}
+
+/// The bus as claude and gemini both describe an HTTP MCP server. They share a schema, so they
+/// share this. The token stays an env expansion rather than a baked value: that is what lets one
+/// file serve every node while each node still authenticates as itself, and it keeps the secret
+/// off disk.
+fn bus_entry_dollar_syntax(port: u16) -> serde_json::Value {
+    serde_json::json!({
+        "type": "http",
+        "url": format!("http://127.0.0.1:{port}/mcp"),
+        "headers": { TOKEN_HEADER: format!("${{{TOKEN_ENV}}}") },
+    })
 }
 
 /// Write the workspace's `.mcp.json`. claude is pointed at this file with `--mcp-config`.
@@ -42,27 +80,108 @@ fn mcp_json_path(workspace: &Path) -> std::path::PathBuf {
 /// claude to expand from the process env, which is what lets one file serve every node while each
 /// node still authenticates as itself, and keeps the secret off disk.
 pub fn write_mcp_json(workspace: &Path, port: u16) -> io::Result<()> {
-    let body = format!(
-        r#"{{
-  "mcpServers": {{
-    "{BUS_NAME}": {{
-      "type": "http",
-      "url": "http://127.0.0.1:{port}/mcp",
-      "headers": {{
-        "{TOKEN_HEADER}": "${{{TOKEN_ENV}}}"
-      }}
-    }}
-  }}
-}}
-"#
-    );
+    let body = serde_json::json!({
+        "mcpServers": { BUS_NAME: bus_entry_dollar_syntax(port) },
+    });
     std::fs::create_dir_all(workspace)?;
-    std::fs::write(mcp_json_path(workspace), body)
+    std::fs::write(mcp_json_path(workspace), pretty(&body))
+}
+
+/// Put the bus into the workspace's gemini settings, keeping whatever else is in there.
+///
+/// Gemini has no flag that points it at a config file, so unlike claude this has to land in the
+/// path gemini already reads. A user can legitimately own that file (it holds their theme, model,
+/// and their own MCP servers), so writing over it would quietly destroy their settings the first
+/// time they opened the folder in Identra. I read it, replace only our one key under `mcpServers`,
+/// and write it back.
+///
+/// If the file is there but is not valid JSON, gemini cannot be reading it either, so I move it
+/// aside to `.bak` and start clean. That is the same bargain `canvas.rs` makes with a corrupt
+/// canvas: never silently discard something the user might want back, never let it wedge startup.
+pub fn write_gemini_settings(workspace: &Path, port: u16) -> io::Result<()> {
+    let path = gemini_settings_path(workspace);
+    // I keep this as a Map rather than a Value so there is no "is it really an object" question
+    // left to answer further down, and so the merge below needs no unwrap.
+    let mut settings: serde_json::Map<String, serde_json::Value> =
+        match std::fs::read_to_string(&path) {
+            Ok(text) => {
+                match serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&text) {
+                    Ok(map) => map,
+                    // Unparseable, or valid JSON that is not an object (a bare array or string cannot hold
+                    // an mcpServers key). Either way gemini gets nothing useful out of it as it stands.
+                    Err(_) => {
+                        std::fs::rename(&path, path.with_extension("json.bak"))?;
+                        serde_json::Map::new()
+                    }
+                }
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => serde_json::Map::new(),
+            Err(e) => return Err(e),
+        };
+
+    // The `None` arm also covers a settings file whose `mcpServers` exists but is not an object. I
+    // overwrite just that key rather than bailing, because a malformed sub-key should cost the user
+    // their broken value, not the rest of a file that is otherwise fine.
+    match settings
+        .get_mut("mcpServers")
+        .and_then(|s| s.as_object_mut())
+    {
+        Some(servers) => {
+            servers.insert(BUS_NAME.into(), bus_entry_dollar_syntax(port));
+        }
+        None => {
+            settings.insert(
+                "mcpServers".into(),
+                serde_json::json!({ BUS_NAME: bus_entry_dollar_syntax(port) }),
+            );
+        }
+    }
+
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(path, pretty(&serde_json::Value::Object(settings)))
+}
+
+/// Write the opencode config Identra points opencode at with `$OPENCODE_CONFIG`.
+///
+/// This one is ours alone, so there is nothing to merge: opencode layers it over the user's own
+/// config itself, and their servers survive because opencode merges rather than replaces. It lives
+/// under `.identra/` for the same reason, which keeps the project root free of a file the user did
+/// not ask for.
+///
+/// opencode spells a remote server and its interpolation differently from claude and gemini, hence
+/// the separate shape rather than reusing [`bus_entry_dollar_syntax`].
+pub fn write_opencode_config(workspace: &Path, port: u16) -> io::Result<()> {
+    let body = serde_json::json!({
+        "mcp": {
+            BUS_NAME: {
+                "type": "remote",
+                "url": format!("http://127.0.0.1:{port}/mcp"),
+                "enabled": true,
+                "headers": { TOKEN_HEADER: format!("{{env:{TOKEN_ENV}}}") },
+            }
+        }
+    });
+    let path = opencode_config_path(workspace);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(path, pretty(&body))
+}
+
+/// Every config file here is one a human may open and read, so they get indented JSON with a
+/// trailing newline rather than one long line.
+fn pretty(value: &serde_json::Value) -> String {
+    let mut text = serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
+    text.push('\n');
+    text
 }
 
 /// Extra launch arguments that put this agent on the bus, or an empty list for an agent Identra
 /// does not know how to wire. Codex carries its whole bus config here, which is why it needs no
-/// config file. Claude just needs pointing at the workspace `.mcp.json`.
+/// config file. Claude just needs pointing at the workspace `.mcp.json`. Gemini and opencode both
+/// read a file, so their args carry only what the file cannot say.
 pub fn launch_args(kind: &str, port: u16, workspace: &Path) -> Vec<String> {
     match kind {
         "codex" => vec![
@@ -79,19 +198,44 @@ pub fn launch_args(kind: &str, port: u16, workspace: &Path) -> Vec<String> {
             "--mcp-config".into(),
             mcp_json_path(workspace).display().to_string(),
         ],
+        // Gemini refuses to load project MCP servers in a folder it has not been told to trust, and
+        // it does it quietly: the node comes up looking healthy with no bus tools on it. The user
+        // opened this workspace in Identra deliberately, which is the same act gemini's own prompt
+        // is asking them to confirm, so I answer it for the session rather than ship a node that
+        // silently has no peers. This trusts one folder for one run, and writes no trust to disk.
+        "gemini" => vec!["--skip-trust".into()],
+        // opencode is wired entirely through $OPENCODE_CONFIG, see launch_env.
         _ => Vec::new(),
     }
 }
 
-/// The env every agent node is launched with. `token` is this node's own secret and is the only
-/// thing the bus reads its identity from, so mint a fresh one per node. `node_id` is passed for the
+/// The env an agent node is launched with. `token` is this node's own secret and is the only thing
+/// the bus reads its identity from, so mint a fresh one per node. `node_id` is passed for the
 /// agent's own benefit and carries no authority.
-pub fn launch_env(port: u16, token: &str, node_id: &str) -> Vec<(String, String)> {
-    vec![
+///
+/// `kind` is here for opencode, which takes its bus config from an env-named file rather than from
+/// a flag. I set that variable only for opencode rather than for every node: it would be inert for
+/// the others, but an env var that lies about what is reading it is the kind of thing that costs
+/// someone an afternoon later.
+pub fn launch_env(
+    kind: &str,
+    port: u16,
+    token: &str,
+    node_id: &str,
+    workspace: &Path,
+) -> Vec<(String, String)> {
+    let mut env = vec![
         (PORT_ENV.into(), port.to_string()),
         (TOKEN_ENV.into(), token.into()),
         (NODE_ENV.into(), node_id.into()),
-    ]
+    ];
+    if kind == "opencode" {
+        env.push((
+            OPENCODE_CONFIG_ENV.into(),
+            opencode_config_path(workspace).display().to_string(),
+        ));
+    }
+    env
 }
 
 /// The guide Identra drops in a workspace so the agents know they are not alone. Codex reads
@@ -220,11 +364,16 @@ If you have nothing to send, send nothing. Staying silent is how a run between a
 end, and a reply that adds no information just keeps the other one working.
 "#;
 
-/// Drop the collaboration guide into the workspace under both names, without clobbering a guide the
-/// user has written themselves.
+/// Drop the collaboration guide into the workspace under every name a fronted CLI reads, without
+/// clobbering a guide the user has written themselves.
+///
+/// One text, several file names, because each CLI looks for its own: codex and opencode read
+/// `AGENTS.md`, claude reads `CLAUDE.md`, gemini reads `GEMINI.md`. Getting an agent onto the bus
+/// and not giving it the guide is close to pointless, since it then has the tools and no reason to
+/// reach for them, so this list has to grow whenever `launch_args` learns a new agent.
 pub fn write_guides(workspace: &Path) -> io::Result<()> {
     std::fs::create_dir_all(workspace)?;
-    for name in ["AGENTS.md", "CLAUDE.md"] {
+    for name in ["AGENTS.md", "CLAUDE.md", "GEMINI.md"] {
         let path = workspace.join(name);
         if !path.exists() {
             std::fs::write(path, GUIDE)?;
@@ -279,13 +428,116 @@ mod tests {
             vec!["--mcp-config".to_string(), "/tmp/ws/.mcp.json".to_string()]
         );
 
+        // gemini's whole bus config is in its settings file. The one thing a file cannot do is get
+        // itself past the folder-trust gate, so that is all its args carry.
+        assert_eq!(launch_args("gemini", 8900, ws), vec!["--skip-trust"]);
+
+        // opencode is wired by env alone, so no args and nothing written to the user's project.
+        assert!(launch_args("opencode", 8900, ws).is_empty());
+
         // An agent I have no wiring for launches clean rather than with junk flags.
         assert!(launch_args("aider", 8900, ws).is_empty());
 
         // Each node's env names that node, which is how the bus tells callers apart.
-        let env = launch_env(8900, "secret", "node-a");
+        let env = launch_env("codex", 8900, "secret", "node-a", ws);
         assert!(env.contains(&("IDENTRA_BUS_NODE".into(), "node-a".into())));
         assert!(env.contains(&("IDENTRA_BUS_TOKEN".into(), "secret".into())));
+        // Only opencode is told where the extra config is, because only opencode reads it.
+        assert!(!env.iter().any(|(k, _)| k == "OPENCODE_CONFIG"));
+        assert!(
+            launch_env("opencode", 8900, "secret", "node-a", ws).contains(&(
+                "OPENCODE_CONFIG".into(),
+                "/tmp/ws/.identra/opencode.json".into()
+            ))
+        );
+    }
+
+    /// Gemini is the one CLI whose config file Identra has to share with the user, so the merge is
+    /// the part worth pinning: their settings survive, their own servers survive, and the bus lands
+    /// alongside rather than on top.
+    #[test]
+    fn gemini_settings_merge_keeps_what_the_user_wrote() {
+        let dir = std::env::temp_dir().join(format!("identra-gemcfg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".gemini")).unwrap();
+        std::fs::write(
+            dir.join(".gemini/settings.json"),
+            r#"{"theme":"mine","mcpServers":{"user-own":{"url":"http://127.0.0.1:9999/mcp"}}}"#,
+        )
+        .unwrap();
+
+        write_gemini_settings(&dir, 8900).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join(".gemini/settings.json")).unwrap(),
+        )
+        .unwrap();
+
+        // Their unrelated settings and their own MCP server both live through it.
+        assert_eq!(parsed["theme"], "mine");
+        assert_eq!(
+            parsed["mcpServers"]["user-own"]["url"],
+            "http://127.0.0.1:9999/mcp"
+        );
+        // And the bus is there, with the token left for gemini to expand out of the node's env.
+        assert_eq!(parsed["mcpServers"]["identra-bus"]["type"], "http");
+        assert_eq!(
+            parsed["mcpServers"]["identra-bus"]["headers"]["X-Identra-Token"],
+            "${IDENTRA_BUS_TOKEN}"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A settings file that is not JSON is one gemini cannot read either, so the bus still has to
+    /// land. What must not happen is losing whatever the user had in there without a trace.
+    #[test]
+    fn corrupt_gemini_settings_are_kept_aside_not_dropped() {
+        let dir = std::env::temp_dir().join(format!("identra-gembad-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".gemini")).unwrap();
+        std::fs::write(dir.join(".gemini/settings.json"), "{ this is not json").unwrap();
+
+        write_gemini_settings(&dir, 8900).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(dir.join(".gemini/settings.json.bak")).unwrap(),
+            "{ this is not json",
+            "the unreadable original is recoverable"
+        );
+        let parsed: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join(".gemini/settings.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(parsed["mcpServers"]["identra-bus"]["type"], "http");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// opencode's file is Identra's alone, so the things to pin are that it is out of the user's
+    /// project root and that it uses opencode's own interpolation spelling rather than claude's.
+    #[test]
+    fn opencode_config_is_ours_and_uses_its_own_syntax() {
+        let dir = std::env::temp_dir().join(format!("identra-occfg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        write_opencode_config(&dir, 8900).unwrap();
+        let body = std::fs::read_to_string(dir.join(".identra/opencode.json")).unwrap();
+
+        assert!(
+            !dir.join("opencode.json").exists(),
+            "the project root stays clean"
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(parsed["mcp"]["identra-bus"]["type"], "remote");
+        assert_eq!(parsed["mcp"]["identra-bus"]["enabled"], true);
+        // opencode spells interpolation {env:VAR}. A ${VAR} here would be sent literally, and the
+        // bus would reject the node with no clue as to why.
+        assert_eq!(
+            parsed["mcp"]["identra-bus"]["headers"]["X-Identra-Token"],
+            "{env:IDENTRA_BUS_TOKEN}"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

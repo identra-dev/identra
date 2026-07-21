@@ -31,10 +31,18 @@ impl AppState {
     }
 
     /// Point the app at a workspace and make sure that folder is ready for agents: the bus config
-    /// claude reads, and the guide that tells the agents they can work with each other. I do this
-    /// on every open because the bus port changes per launch.
+    /// each CLI reads, and the guide that tells the agents they can work with each other. I do this
+    /// on every open because the bus port changes per launch, so a stale file would point a node at
+    /// a port nothing is listening on.
+    ///
+    /// Three files because three CLIs disagree about where config lives. codex needs none, it takes
+    /// its bus config as launch arguments.
     fn activate(&self, path: PathBuf) -> Result<(), String> {
         identra_mcp::config::write_mcp_json(&path, self.mcp_port).map_err(|e| e.to_string())?;
+        identra_mcp::config::write_gemini_settings(&path, self.mcp_port)
+            .map_err(|e| e.to_string())?;
+        identra_mcp::config::write_opencode_config(&path, self.mcp_port)
+            .map_err(|e| e.to_string())?;
         identra_mcp::config::write_guides(&path).map_err(|e| e.to_string())?;
         *self.project_dir.lock().unwrap() = path;
         Ok(())
@@ -93,10 +101,11 @@ fn terminal_start(
     let dir = cwd.unwrap_or_else(|| workspace.display().to_string());
 
     // Put this node on the bus at launch, because every CLI reads its MCP servers once at startup.
-    // The extra args carry the server (codex takes it inline, claude gets pointed at the workspace
-    // .mcp.json), and the env carries this node's own secret, which is what the bus reads its
-    // identity from. Minting it here, per node, is what stops one agent claiming to be another; it
-    // goes into the child's env and never touches the frontend or the disk.
+    // The extra args carry whatever that CLI cannot take from a file (codex takes the server
+    // inline, claude gets pointed at the workspace .mcp.json, gemini needs the folder trusted), and
+    // the env carries this node's own secret, which is what the bus reads its identity from.
+    // Minting it here, per node, is what stops one agent claiming to be another; it goes into the
+    // child's env and never touches the frontend or the disk.
     let mut args = args;
 
     // Pick the conversation this node was having back up, if it still exists. This goes on before
@@ -116,7 +125,7 @@ fn terminal_start(
         &workspace,
     ));
     let token = state.bus.issue_token(&id);
-    let env = identra_mcp::config::launch_env(state.mcp_port, &token, &id);
+    let env = identra_mcp::config::launch_env(&kind, state.mcp_port, &token, &id, &workspace);
 
     state
         .manager
