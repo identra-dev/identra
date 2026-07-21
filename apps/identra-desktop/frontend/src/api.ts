@@ -138,6 +138,15 @@ export const canvasLoad = () => invoke<Canvas>("canvas_load");
 export const canvasSave = (canvas: Canvas) =>
   invoke<void>("canvas_save", { canvas });
 
+// Both open a file dialog, so both resolve to a "nothing happened" value when the user cancels:
+// false from export, null from import. A cancelled dialog is not an error and must never be shown
+// as one. The board is passed to export rather than read from disk so what lands in the file is
+// what is on screen, including anything the debounced save has not written yet.
+export const canvasExport = (canvas: Canvas) =>
+  invoke<boolean>("canvas_export", { canvas });
+
+export const canvasImport = () => invoke<Canvas | null>("canvas_import");
+
 // The shared board the agents claim work from, and what the project has learned. Both are written
 // by agents through the bus; these read them so the human can see the same thing they do.
 export type Task = {

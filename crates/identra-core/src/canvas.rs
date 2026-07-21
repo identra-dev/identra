@@ -119,6 +119,88 @@ pub fn canvas_path(project_dir: &Path) -> PathBuf {
     project_dir.join(".identra").join("canvas.json")
 }
 
+/// The tag on an exported file. A canvas on disk in a workspace is unwrapped, but a file the user
+/// has moved somewhere else has lost all its context, so the file has to say what it is.
+const EXPORT_FORMAT: &str = "identra-canvas";
+/// Bumped only when an older Identra could not make sense of a newer file. Adding a field with a
+/// serde default is not that: `locked` and `seat` both arrived without a bump, because a build that
+/// predates them reads such a file correctly and just ignores what it does not know.
+const EXPORT_VERSION: u32 = 1;
+
+/// A canvas as a standalone file: the board, wrapped in enough to identify it.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Export {
+    pub format: String,
+    pub version: u32,
+    pub canvas: Canvas,
+}
+
+/// Wrap the canvas for export, as pretty JSON with a trailing newline.
+///
+/// Indented because an exported canvas is a file a person may open, diff, or commit next to their
+/// project, and a single line of JSON is none of those things.
+pub fn export(canvas: &Canvas) -> String {
+    let wrapped = Export {
+        format: EXPORT_FORMAT.into(),
+        version: EXPORT_VERSION,
+        canvas: canvas.clone(),
+    };
+    let mut text = serde_json::to_string_pretty(&wrapped)
+        // A Canvas is plain data with no map keys that could fail to serialize, so this cannot
+        // happen. Falling back to the compact form rather than unwrapping keeps the promise that
+        // export never loses the user's board.
+        .unwrap_or_else(|_| serde_json::to_string(&wrapped).unwrap_or_default());
+    text.push('\n');
+    text
+}
+
+/// What went wrong reading a file the user chose to import.
+///
+/// Named cases rather than one string, because the UI says something different for each: the wrong
+/// file entirely is a mistake to correct, and a newer version is a build to upgrade.
+#[derive(Debug, PartialEq)]
+pub enum ImportError {
+    NotJson(String),
+    NotACanvas,
+    TooNew(u32),
+}
+
+impl std::fmt::Display for ImportError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ImportError::NotJson(why) => write!(f, "that file is not valid JSON: {why}"),
+            ImportError::NotACanvas => {
+                write!(f, "that file is not an Identra canvas export")
+            }
+            ImportError::TooNew(v) => write!(
+                f,
+                "that canvas was exported by a newer Identra (format version {v}), so this build \
+                 cannot read it. Update Identra and try again."
+            ),
+        }
+    }
+}
+
+/// Read an exported canvas back.
+///
+/// I check the tag before trusting the contents. Serde would happily accept any JSON object as a
+/// Canvas, because every field has a default, so a text file or somebody's `package.json` would
+/// import as a blank board and silently replace the user's real one. The tag is what makes the
+/// difference between importing and destroying.
+pub fn import(text: &str) -> Result<Canvas, ImportError> {
+    let value: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| ImportError::NotJson(e.to_string()))?;
+    if value.get("format").and_then(|f| f.as_str()) != Some(EXPORT_FORMAT) {
+        return Err(ImportError::NotACanvas);
+    }
+    let version = value.get("version").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    if version > EXPORT_VERSION {
+        return Err(ImportError::TooNew(version));
+    }
+    let wrapped: Export = serde_json::from_value(value).map_err(|_| ImportError::NotACanvas)?;
+    Ok(wrapped.canvas)
+}
+
 /// Read the saved canvas, or an empty one if there is nothing valid on disk. Never fails: a missing
 /// or unreadable file means a blank board, not a crash.
 ///
@@ -254,5 +336,66 @@ mod tests {
         assert_eq!(load(&dir).seat, None);
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_exported_canvas_comes_back_as_itself() {
+        let canvas = Canvas {
+            nodes: vec![Node {
+                id: "n1".into(),
+                kind: "gemini".into(),
+                x: 1.0,
+                y: 2.0,
+                width: 480.0,
+                height: 320.0,
+                title: "Router".into(),
+                cwd: None,
+                locked: true,
+            }],
+            edges: Vec::new(),
+            viewport: Viewport::default(),
+            title: "Auth refactor".into(),
+            seat: Some("n1".into()),
+        };
+        assert_eq!(import(&export(&canvas)), Ok(canvas));
+    }
+
+    /// Import replaces the board the user is looking at, so what it refuses matters more than what
+    /// it accepts. Every field on Canvas has a serde default, which means any JSON object at all
+    /// would deserialize as a blank canvas: without the format tag, importing the wrong file would
+    /// quietly wipe the user's real one instead of failing.
+    #[test]
+    fn import_refuses_anything_that_is_not_ours() {
+        assert_eq!(import("not json at all").is_err(), true);
+        // A perfectly good JSON object, and the exact shape that would otherwise import as a blank
+        // board and destroy the canvas it replaced.
+        assert_eq!(
+            import(r#"{"name":"some-package","version":"1.0.0"}"#),
+            Err(ImportError::NotACanvas)
+        );
+        // Right shape, no tag. Still refused: the tag is the only thing that says this file was
+        // meant for us.
+        assert_eq!(
+            import(r#"{"canvas":{"nodes":[],"edges":[]}}"#),
+            Err(ImportError::NotACanvas)
+        );
+        // A file from a future build, which is a reason to update rather than a corrupt file.
+        assert_eq!(
+            import(r#"{"format":"identra-canvas","version":99,"canvas":{}}"#),
+            Err(ImportError::TooNew(99))
+        );
+    }
+
+    /// A canvas exported before a field existed has to keep importing, or every export anyone has
+    /// ever taken becomes rubbish the next time a field is added.
+    #[test]
+    fn an_older_export_still_imports() {
+        let old = r#"{"format":"identra-canvas","version":1,"canvas":{
+            "nodes":[{"id":"n1","kind":"codex","x":0,"y":0}],"edges":[]}}"#;
+        let canvas = import(old).expect("an older export is still ours");
+        assert_eq!(canvas.nodes.len(), 1);
+        assert_eq!(canvas.nodes[0].width, 480.0, "defaults fill the gaps");
+        assert!(!canvas.nodes[0].locked);
+        assert_eq!(canvas.seat, None);
     }
 }

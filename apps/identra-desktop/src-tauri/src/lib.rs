@@ -175,9 +175,6 @@ fn terminal_snapshot(state: State<AppState>, id: String) -> Option<Snapshot> {
         .map(|(data, last_seq)| Snapshot { data, last_seq })
 }
 
-/// Kill a node's agent. Deleting a node from the canvas is a deliberate act, so its conversation is
-/// forgotten too: the alternative is a new node with the same id silently inheriting a dead one's
-/// session, which is the wrong conversation arriving from nowhere.
 /// What a node is doing right now, asked rather than pushed.
 ///
 /// The node already knows it is running, because output is arriving, and it already knows it has
@@ -194,6 +191,10 @@ fn terminal_status(state: State<AppState>, id: String) -> Option<identra_core::t
 /// path a closed node takes: the PTY and its child, the conversation it was resuming, and its bus
 /// credential. Leaving any one of them behind is the difference between closing a node and hiding
 /// it.
+///
+/// The conversation goes deliberately. Closing a node is a considered act, and keeping the session
+/// would mean a later node reusing that id silently inherits a dead one's history, which is the
+/// wrong conversation arriving from nowhere.
 #[tauri::command]
 fn terminal_kill(state: State<AppState>, id: String) -> Result<(), String> {
     session::forget(&state.dir(), &id);
@@ -213,6 +214,64 @@ fn canvas_save(state: State<AppState>, canvas: Canvas) -> Result<(), String> {
 
 /// The canvas reporting what it did with a command an agent asked for. The request id is what
 /// matches this answer to the agent still waiting on it.
+/// Write the current board to a file the user picks. `Ok(false)` means they cancelled the dialog,
+/// which is not a failure and must not be reported as one.
+///
+/// The canvas comes from the window rather than from disk, so what is exported is the board on
+/// screen including any change that has not hit the debounced save yet. Exporting a slightly stale
+/// file would be a bug nobody would think to look for.
+#[tauri::command]
+async fn canvas_export(app: AppHandle, canvas: Canvas) -> Result<bool, String> {
+    let Some(target) = app
+        .dialog()
+        .file()
+        .set_title("Export this canvas")
+        .set_file_name("canvas.identra.json")
+        .add_filter("Identra canvas", &["json"])
+        .blocking_save_file()
+    else {
+        return Ok(false);
+    };
+    let path = target
+        .into_path()
+        .map_err(|e| format!("that location cannot be written: {e}"))?;
+    std::fs::write(path, canvas::export(&canvas))
+        .map_err(|e| format!("could not write it: {e}"))?;
+    Ok(true)
+}
+
+/// Read a canvas from a file the user picks, and make it this workspace's board.
+///
+/// `Ok(None)` is a cancelled dialog. Anything that is not one of our exports is refused by name,
+/// because every field on a Canvas has a default and so any JSON object at all would otherwise
+/// import as a blank board and replace the real one.
+///
+/// The imported board is saved before it is returned. Import is the one operation that discards
+/// what was there, so leaving the new state only in the window would mean a crash before the next
+/// debounced save loses both the old board and the new one.
+#[tauri::command]
+async fn canvas_import(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<Canvas>, String> {
+    let Some(chosen) = app
+        .dialog()
+        .file()
+        .set_title("Import a canvas")
+        .add_filter("Identra canvas", &["json"])
+        .blocking_pick_file()
+    else {
+        return Ok(None);
+    };
+    let path = chosen
+        .into_path()
+        .map_err(|e| format!("that file cannot be opened: {e}"))?;
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("could not read it: {e}"))?;
+    let imported = canvas::import(&text).map_err(|e| e.to_string())?;
+    canvas::save(&state.dir(), &imported).map_err(|e| e.to_string())?;
+    Ok(Some(imported))
+}
+
 #[tauri::command]
 fn canvas_command_result(state: State<AppState>, request_id: String, result: serde_json::Value) {
     state.bus.resolve_canvas(&request_id, result);
@@ -498,6 +557,8 @@ pub fn run() {
             terminal_kill,
             canvas_load,
             canvas_save,
+            canvas_export,
+            canvas_import,
             canvas_command_result,
             board_list,
             memory_list,

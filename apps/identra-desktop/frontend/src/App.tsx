@@ -36,6 +36,8 @@ import {
 import {
   boardList,
   canvasCommandResult,
+  canvasExport,
+  canvasImport,
   canvasSave,
   defaultOrchestrator,
   detectAgents,
@@ -257,6 +259,62 @@ export default function App() {
       return next;
     });
   }, [scheduleSave]);
+
+  // Take the board out to a file, or bring one in.
+  //
+  // Export sends what is on screen rather than what is on disk, so a change made in the last few
+  // hundred milliseconds is in the file too. Both report through the save banner, which is already
+  // the place this window says a canvas operation failed.
+  const exportCanvas = useCallback(async () => {
+    try {
+      await canvasExport(snapshot());
+    } catch (e) {
+      setSaveError(`That canvas was not exported: ${String(e)}`);
+    }
+  }, [snapshot]);
+
+  const importCanvas = useCallback(async () => {
+    // Asked before the dialog opens, not after a file is chosen. Confirming a destructive action
+    // and then being asked to pick the file is the wrong order: by then it reads as already decided.
+    if (
+      nodesRef.current.length > 0 &&
+      !window.confirm(
+        "Import a canvas?\n\nThis replaces the board in this workspace. The agents running here stop, and their conversations are forgotten.",
+      )
+    ) {
+      return;
+    }
+    try {
+      const imported = await canvasImport();
+      if (imported === null) return; // cancelled, nothing to say
+      // Stop what is running before the nodes go. These are the nodes being replaced, so the same
+      // teardown a close does has to happen here or their PTYs outlive the board they belonged to.
+      for (const n of nodesRef.current) {
+        void terminalKill(n.id).catch(() => {
+          // Best effort. The board is being replaced either way, and a node that would not die
+          // cleanly is not a reason to leave the user looking at a canvas they just replaced.
+        });
+      }
+      const loaded = imported.nodes.map(toFlow);
+      nodesRef.current = loaded;
+      edgesRef.current = imported.edges;
+      titleRef.current = imported.title;
+      const restored = imported.nodes.some((n) => n.id === imported.seat)
+        ? imported.seat
+        : null;
+      seatRef.current = restored;
+      setSeat(restored);
+      setNodes(loaded);
+      setEdges(imported.edges);
+      viewport.current = imported.viewport;
+      // The engine already wrote it to disk as part of importing, so the window is in step with
+      // the file rather than one debounce behind it.
+      unsaved.current = false;
+      setSaveError(null);
+    } catch (e) {
+      setSaveError(`That canvas was not imported: ${String(e)}`);
+    }
+  }, []);
 
   // Close a node to agents, or open it again. The user's own hands are never restricted by this:
   // they can still wire a locked node themselves, because it is their canvas and the lock is about
@@ -796,8 +854,25 @@ export default function App() {
             >
               Map
             </button>
+            <button
+              className="identra-topbar__btn"
+              onClick={() => void exportCanvas()}
+              title="Save this canvas to a file"
+            >
+              Export
+            </button>
           </>
         )}
+        {/* Import stays available on an empty canvas: bringing a board in is exactly what you want
+            to do with an empty one, and it is the only one of these that is useful with nothing
+            on screen. */}
+        <button
+          className="identra-topbar__btn"
+          onClick={() => void importCanvas()}
+          title="Replace this canvas with one from a file"
+        >
+          Import
+        </button>
       </div>
 
       {panelOpen && <WorkPanel onClose={() => setPanelOpen(false)} />}
