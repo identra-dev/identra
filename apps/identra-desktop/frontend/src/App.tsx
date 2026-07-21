@@ -4,6 +4,7 @@ import {
   ReactFlow,
   Background,
   Controls,
+  MiniMap,
   addEdge,
   applyEdgeChanges,
   applyNodeChanges,
@@ -25,6 +26,7 @@ import WorkPanel from "./WorkPanel";
 import WorkspaceMenu from "./WorkspaceMenu";
 import CommandBar, { type DispatchState } from "./CommandBar";
 import { AgentIcon } from "./icons";
+import { tidyPositions } from "./tidy";
 import {
   composeDispatch,
   planLine,
@@ -224,6 +226,36 @@ export default function App() {
       void saveNow();
     }, SAVE_DEBOUNCE_MS);
   }, [saveNow]);
+
+  // Straighten the board. Positions only: nothing is started, stopped, or rewired, so this is
+  // always safe to press. It lays out into the top left of what is currently on screen rather than
+  // at the canvas origin, because a canvas that has been panned would otherwise tidy itself out of
+  // view and look like it had deleted everything.
+  const [minimapOn, setMinimapOn] = useState(false);
+  const tidy = useCallback(() => {
+    const vp = viewport.current;
+    const origin = { x: -vp.x / vp.zoom + 40, y: -vp.y / vp.zoom + 40 };
+    const placed = new Map(
+      tidyPositions(
+        nodesRef.current.map((n) => ({
+          id: n.id,
+          position: n.position,
+          width: Number(n.style?.width) || DEFAULT_W,
+          height: Number(n.style?.height) || DEFAULT_H,
+        })),
+        origin,
+      ).map((p) => [p.id, p]),
+    );
+    setNodes((cur) => {
+      const next = cur.map((n) => {
+        const at = placed.get(n.id);
+        return at ? { ...n, position: { x: at.x, y: at.y } } : n;
+      });
+      nodesRef.current = next;
+      scheduleSave();
+      return next;
+    });
+  }, [scheduleSave]);
 
   // Moving the seat is one write. Nothing is spawned or killed here: the seat is a role, so taking
   // it from a node leaves that node running exactly as it was, just no longer the one the command
@@ -635,6 +667,18 @@ export default function App() {
       >
         <Background color="#3a3a3a" gap={24} />
         <Controls showInteractive={false} />
+        {/* Off by default. On a canvas with three nodes it is a box covering the corner for no
+            gain; it earns its place once the command center has spawned enough helpers that the
+            board runs off screen, which is exactly when the user goes looking for it. */}
+        {minimapOn && (
+          <MiniMap
+            pannable
+            zoomable
+            className="identra-minimap"
+            maskColor="rgba(20, 20, 20, 0.6)"
+            nodeColor="#5e5c64"
+          />
+        )}
       </ReactFlow>
 
       {/* A blank grid reads as a broken app. With no agent installed the dock is all disabled, so
@@ -677,6 +721,27 @@ export default function App() {
         >
           Work
         </button>
+        {/* Both are hidden on an empty canvas. There is nothing to tidy and nothing to map, and a
+            row of controls that do nothing is how an empty state stops reading as a first run. */}
+        {nodes.length > 0 && (
+          <>
+            <button
+              className="identra-topbar__btn"
+              onClick={tidy}
+              title="Lay the nodes out on a grid. Moves them, nothing else."
+            >
+              Tidy
+            </button>
+            <button
+              className="identra-topbar__btn"
+              data-on={minimapOn}
+              onClick={() => setMinimapOn((v) => !v)}
+              title="Show a map of the whole canvas"
+            >
+              Map
+            </button>
+          </>
+        )}
       </div>
 
       {panelOpen && <WorkPanel onClose={() => setPanelOpen(false)} />}

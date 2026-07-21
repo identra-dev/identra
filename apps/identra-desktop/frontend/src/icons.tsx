@@ -43,10 +43,25 @@ const GLOBE =
 
 const MARKS: Record<string, Mark> = {
   codex: { tile: "#0d0d0d", ink: "#ffffff", path: OPENAI, aura: "#10a37f" },
-  claude: { tile: "#d97757", ink: "#ffffff", path: CLAUDE_CODE, aura: "#d97757" },
+  claude: {
+    tile: "#d97757",
+    ink: "#ffffff",
+    path: CLAUDE_CODE,
+    aura: "#d97757",
+  },
   gemini: { tile: "#ffffff", ink: "#8e75b2", path: GEMINI, aura: "#8e75b2" },
-  opencode: { tile: "#f6f5f4", ink: "#000000", path: OPENCODE, aura: "#22d3ee" },
-  "cursor-agent": { tile: "#f6f5f4", ink: "#000000", path: CURSOR, aura: "#f6f5f4" },
+  opencode: {
+    tile: "#f6f5f4",
+    ink: "#000000",
+    path: OPENCODE,
+    aura: "#22d3ee",
+  },
+  "cursor-agent": {
+    tile: "#f6f5f4",
+    ink: "#000000",
+    path: CURSOR,
+    aura: "#f6f5f4",
+  },
   amp: { tile: "#005af0", ink: "#ffffff", path: AMP, aura: "#005af0" },
   // No published mark I can use, so these carry a lettermark rather than an invented logo.
   aider: { tile: "#17b217", ink: "#ffffff", letter: "A" },

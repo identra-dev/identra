@@ -225,6 +225,18 @@ body {
   border: 1px solid var(--panel-edge);
   backdrop-filter: blur(8px);
 }
+/* The minimap borrows the panel colours rather than React Flow's defaults, which are built for a
+   light canvas and glare on this one. It sits above the dock so the two never overlap. */
+.identra-minimap {
+  background: rgba(44, 44, 44, 0.92);
+  border: 1px solid var(--panel-edge);
+  border-radius: 10px;
+  /* Clear of the command bar, which sits at 110px and grows upward as it gains a plan line and a
+     status line. On a narrow window the bar runs the full width, so stacking above it is the only
+     placement that does not overlap at some size. */
+  bottom: 210px;
+}
+
 /* The command center bar, sitting directly above the dock and sharing its shape so the two read as
    one surface. It is wider than the dock on purpose: the dock is a row of buttons, this is where a
    sentence goes, and an input that looks like a search box invites two words instead of a task. */
