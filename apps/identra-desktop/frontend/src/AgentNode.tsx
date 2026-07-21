@@ -11,6 +11,7 @@ import {
   terminalResize,
   terminalSnapshot,
   terminalStart,
+  terminalStatus,
   type Memory,
   type OutputEvent,
 } from "./api";
@@ -24,10 +25,14 @@ function AgentNodeImpl({ id, data }: NodeProps) {
   const nodeData = data as AgentNodeData;
   const { deleteElements } = useReactFlow();
   const termHost = useRef<HTMLDivElement>(null);
-  // Three honest states. Output means it is working; 1.5s of quiet settles it back to ready. Exit
-  // is the only one the node cannot infer for itself, so the engine tells it: without that, an
-  // agent that finished looks exactly like one that is thinking, forever.
-  const [state, setState] = useState<"ready" | "running" | "exited">("ready");
+  // Four honest states. Output means it is working; 1.5s of quiet settles it. Exit is the only one
+  // the node cannot infer for itself, so the engine tells it: without that, an agent that finished
+  // looks exactly like one that is thinking, forever. And when it settles, quiet splits in two:
+  // finished, or waiting on an answer. That last one the engine works out from the transcript,
+  // because the difference is in what was printed, not in the timing.
+  const [state, setState] = useState<
+    "ready" | "running" | "needs-input" | "exited"
+  >("ready");
   // What the project already knows, shown once when the node opens. This is the payoff made
   // visible: the agent has not typed a word and the human can already see it is not starting cold.
   // A few facts, not the whole store, because it is a glance and not the memory panel.
@@ -83,6 +88,19 @@ function AgentNodeImpl({ id, data }: NodeProps) {
       idleTimer = window.setTimeout(() => {
         running = false;
         setState("ready");
+        // Settling is the one moment worth asking the engine what this quiet means. I set ready
+        // first and correct to needs-input after, so the node never waits on IPC to stop looking
+        // busy. Anything other than needs-input leaves it as it is: the engine uses the same 1.5s
+        // threshold, so it can still say "running" here by a hair, and the local timer is the one
+        // that should win that tie.
+        void terminalStatus(id)
+          .then((status) => {
+            if (disposed || exited || running) return;
+            if (status === "needs-input") setState("needs-input");
+          })
+          .catch(() => {
+            // The node was killed between settling and asking. Ready is already right.
+          });
       }, 1500);
     };
 

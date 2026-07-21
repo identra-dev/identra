@@ -99,6 +99,15 @@ export const terminalResize = (id: string, rows: number, cols: number) =>
 export const terminalSnapshot = (id: string) =>
   invoke<Snapshot | null>("terminal_snapshot", { id });
 
+// What the engine thinks a node is doing. The node tracks running and exited itself, from events,
+// so the reason to ask is the one thing events cannot carry: whether the quiet it just fell into is
+// an agent that finished or an agent waiting for an answer. Null means there is no live terminal
+// under that id, which happens if the node was killed between settling and asking.
+export type TerminalStatus = "running" | "idle" | "needs-input" | "exited";
+
+export const terminalStatus = (id: string) =>
+  invoke<TerminalStatus | null>("terminal_status", { id });
+
 export const terminalKill = (id: string) =>
   invoke<void>("terminal_kill", { id });
 

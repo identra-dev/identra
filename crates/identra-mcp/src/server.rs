@@ -794,6 +794,12 @@ fn describe_status(bus: &Bus, canvas: &canvas::Canvas, id: &str) -> String {
         Some(identra_core::terminal::Status::Idle) => {
             format!("{name} is quiet: it has either finished or is waiting on its human")
         }
+        // Worth saying separately, because the two quiet states mean opposite things to a peer. A
+        // node that finished may have left work for you; a node stuck on a question has not, and
+        // will not until a human answers it, so waiting on it is waiting on a person.
+        Some(identra_core::terminal::Status::NeedsInput) => {
+            format!("{name} has asked its human something and is waiting for an answer")
+        }
         Some(identra_core::terminal::Status::Exited) => format!("{name} has exited"),
         // On the canvas but never launched, or already killed. Both are "not working", which is what
         // the caller actually wants to know.
@@ -802,6 +808,10 @@ fn describe_status(bus: &Bus, canvas: &canvas::Canvas, id: &str) -> String {
 }
 
 /// True when there is no point waiting on this node any longer: it is quiet, gone, or never ran.
+///
+/// A node waiting on its human counts as settled, and deliberately so. It is not working and it
+/// will not start again until a person answers it, so an agent that kept waiting would be waiting
+/// on someone who is not at the keyboard. Better it returns and reads why in `get_node_status`.
 fn settled(bus: &Bus, id: &str) -> bool {
     !matches!(
         bus.manager.status(id),

@@ -6,11 +6,16 @@
   --panel-edge: #1b1b1b;
   --header: #333333;
   --text: #f2f2f2;
-  /* One color per node/dock state (Yaru). Only ready + running are live today. */
+  /* One color per node/dock state (Yaru). */
   --state-ready: #e95420;
   --state-running: #33d17a;
   --state-setup: #e5a50a;
   --state-missing: #5e5c64;
+  /* Aubergine, for a node that asked something and is waiting on you. It is the one state that is
+     about the human rather than the agent, so it gets the brand accent rather than a traffic
+     light. At 9px on a dark header the raw accent is too dark to read, so the dot lightens it and
+     the ring, which has glow spread to carry it, does not. */
+  --state-attention: #77216f;
   --edge-idle: #5e5c64;
 }
 
@@ -79,6 +84,11 @@ body {
 .identra-node__dot[data-state="running"] {
   background: var(--state-running);
   animation: identra-pulse 1.2s ease-in-out infinite;
+}
+/* Steady, deliberately. Running pulses because it is telling you it is busy; this is telling you it
+   has stopped and needs you, and a second thing blinking on the canvas would just be noise. */
+.identra-node__dot[data-state="needs-input"] {
+  background: color-mix(in srgb, var(--state-attention) 62%, #ffffff);
 }
 @keyframes identra-pulse {
   0%,
@@ -833,6 +843,16 @@ body {
 }
 .identra-node[data-state="running"] {
   animation: 2.4s ease-in-out infinite identra-aura;
+}
+/* A node waiting on an answer holds a still aubergine ring. Still is the point: across a canvas of
+   breathing nodes, the one that has stopped and is asking you something is the one that reads as
+   different, and it stays legible in the corner of your eye without competing for it. This is the
+   accent rather than the agent's own colour because the state belongs to you, not to the agent. */
+.identra-node[data-state="needs-input"] {
+  box-shadow:
+    0 8px 24px rgba(0, 0, 0, 0.35),
+    0 0 0 1.5px var(--state-attention),
+    0 0 16px 2px color-mix(in srgb, var(--state-attention) 45%, transparent);
 }
 /* A node whose agent is gone recedes rather than sitting there looking available. */
 .identra-node[data-state="exited"] {

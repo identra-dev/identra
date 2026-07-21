@@ -160,6 +160,18 @@ fn terminal_snapshot(state: State<AppState>, id: String) -> Option<Snapshot> {
 /// Kill a node's agent. Deleting a node from the canvas is a deliberate act, so its conversation is
 /// forgotten too: the alternative is a new node with the same id silently inheriting a dead one's
 /// session, which is the wrong conversation arriving from nowhere.
+/// What a node is doing right now, asked rather than pushed.
+///
+/// The node already knows it is running, because output is arriving, and it already knows it has
+/// exited, because the engine told it. The one thing it cannot see for itself is whether the quiet
+/// it just fell into is an agent that finished or an agent waiting on an answer, and that needs the
+/// tail of the transcript. So the node asks exactly once, at the moment it settles, rather than the
+/// engine pushing a fourth event or anything polling on a timer.
+#[tauri::command]
+fn terminal_status(state: State<AppState>, id: String) -> Option<identra_core::terminal::Status> {
+    state.manager.status(&id)
+}
+
 #[tauri::command]
 fn terminal_kill(state: State<AppState>, id: String) -> Result<(), String> {
     session::forget(&state.dir(), &id);
@@ -457,6 +469,7 @@ pub fn run() {
             terminal_input,
             terminal_resize,
             terminal_snapshot,
+            terminal_status,
             terminal_kill,
             canvas_load,
             canvas_save,

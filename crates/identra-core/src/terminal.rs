@@ -56,10 +56,56 @@ struct Terminal {
 pub enum Status {
     /// Printing, so it is working on something.
     Running,
-    /// Alive and quiet. Either waiting at its prompt or waiting on its human.
+    /// Alive and quiet, and the last thing it printed does not read like a question. Either sitting
+    /// at its prompt or thinking without saying anything.
     Idle,
+    /// Alive, quiet, and the last thing it printed reads like it is waiting for an answer.
+    #[serde(rename = "needs-input")]
+    NeedsInput,
     /// The agent is gone.
     Exited,
+}
+
+/// How far back to read when deciding whether a quiet node is waiting on its human. A prompt is the
+/// last thing on screen by definition, so this only has to be big enough to cover the final line
+/// plus whatever escape noise is wrapped around it.
+const PROMPT_TAIL_BYTES: usize = 2048;
+
+/// Does the tail of a node's output read like the agent asked something and stopped?
+///
+/// This is a guess and it is worth being honest about why it has to be. A CLI over a PTY has no
+/// channel to say "I am waiting for you", so the only evidence is what it printed. I take the last
+/// line that has anything on it and look for the two shapes that a CLI waiting on a human almost
+/// always has: it ends in a question mark, or it offers a choice like `(y/N)`.
+///
+/// The caller only asks once the node has already gone quiet, and that precondition does most of
+/// the work: prose that happens to end in a question mark mid-stream is still Running, so it never
+/// reaches here. What is left is a node that printed a question and then stopped, which is the
+/// thing being looked for.
+///
+/// Getting it wrong is cheap in one direction and free in the other. A false positive shows an
+/// aubergine ring on a node that was merely idle. A false negative just leaves it idle, which is
+/// what it would have been anyway. So I would rather it be a little eager than miss a real prompt,
+/// but not so eager that every node on the canvas glows.
+fn looks_like_a_prompt(text: &str) -> bool {
+    let Some(line) = text.lines().rev().find(|l| !l.trim().is_empty()) else {
+        return false;
+    };
+    let line = line.trim_end();
+    // A trailing cursor block or box-drawing edge is common in a TUI prompt, and it sits after the
+    // punctuation that matters, so it has to come off before the question mark is checked for.
+    let line = line.trim_end_matches(|c: char| {
+        c.is_whitespace() || matches!(c, '\u{2502}' | '\u{2588}' | '_' | '|')
+    });
+    if line.ends_with('?') {
+        return true;
+    }
+    // A y/n affordance, in the spellings CLIs actually use. Lower-cased once so `(Y/n)`, the
+    // default-yes form, is not a separate case to remember.
+    let lowered = line.to_lowercase();
+    ["(y/n)", "[y/n]", "(yes/no)", "[yes/no]", "(y)es", "y/n:"]
+        .iter()
+        .any(|shape| lowered.contains(shape))
 }
 
 /// Something that happened to a terminal, in the order it happened.
@@ -268,6 +314,11 @@ impl TerminalManager {
     /// Read from output timing rather than asked of the agent, because there is nothing to ask: a
     /// CLI over a PTY has no way to say "I finished". Quiet is the only signal it gives, so quiet is
     /// what I report, and the caller is told plainly that is what this means.
+    ///
+    /// The one refinement is that quiet has two meanings, and they are the two a person most wants
+    /// told apart: an agent that is done, and an agent that asked something and is waiting. Only
+    /// once a node has gone quiet do I read the tail of what it printed to separate them, so the
+    /// text scan costs nothing while the node is actually working.
     pub fn status(&self, id: &str) -> Option<Status> {
         let terms = self.terminals.lock().unwrap();
         let term = terms.get(id)?;
@@ -275,8 +326,24 @@ impl TerminalManager {
             return Some(Status::Exited);
         }
         let quiet_for = term.last_output.lock().unwrap().elapsed();
-        Some(if quiet_for < QUIET {
-            Status::Running
+        if quiet_for < QUIET {
+            return Some(Status::Running);
+        }
+        // Only the last chunks can hold the final line, so I walk back from the end and stop as
+        // soon as I have enough. The whole ring is up to 5000 chunks and reading it here would put
+        // a scan of the entire scrollback behind a call the UI makes on every settle.
+        let buf = term.buffer.lock().unwrap();
+        let mut recent: Vec<u8> = Vec::new();
+        for out in buf.iter().rev() {
+            if recent.len() >= PROMPT_TAIL_BYTES {
+                break;
+            }
+            recent.splice(0..0, out.data.iter().copied());
+        }
+        drop(buf);
+        let text = crate::text::tail(&crate::text::strip_ansi(&recent), PROMPT_TAIL_BYTES);
+        Some(if looks_like_a_prompt(&text) {
+            Status::NeedsInput
         } else {
             Status::Idle
         })
@@ -375,5 +442,92 @@ mod tests {
                 .unwrap_err(),
             "terminal not found"
         );
+    }
+
+    /// The heuristic is checked on its own below. This checks the wiring around it: a real child in
+    /// a real PTY that asks something and then waits has to come back as NeedsInput, and one that
+    /// says something ordinary and waits has to stay Idle. Those two go through the ring buffer, the
+    /// ANSI strip, and the quiet timer, none of which the pure test touches.
+    #[test]
+    fn a_waiting_agent_is_told_apart_from_a_quiet_one() {
+        let mgr = TerminalManager::new(Arc::new(|_id, _event| {}));
+
+        // `read` holds the child open with nothing more to print, which is exactly the shape of a
+        // CLI sitting on a prompt: the question is the last thing in the buffer and it stays there.
+        mgr.start(
+            "asking".into(),
+            "sh",
+            &[
+                "-c".into(),
+                "printf 'Overwrite main.rs? (y/N) '; read x".into(),
+            ],
+            None,
+            &[],
+            24,
+            80,
+        )
+        .expect("spawn a waiting child");
+
+        mgr.start(
+            "working".into(),
+            "sh",
+            &["-c".into(), "printf 'Wrote 42 lines.\\n'; read x".into()],
+            None,
+            &[],
+            24,
+            80,
+        )
+        .expect("spawn a quiet child");
+
+        // Both are Running while the output is fresh, whatever they printed. The split only exists
+        // once a node has actually gone quiet, so before QUIET there is nothing to tell apart.
+        assert_eq!(mgr.status("asking"), Some(Status::Running));
+
+        // Past the quiet threshold, with a margin so a slow machine does not make this flaky.
+        std::thread::sleep(QUIET + Duration::from_millis(400));
+
+        assert_eq!(
+            mgr.status("asking"),
+            Some(Status::NeedsInput),
+            "a child sitting on a question is waiting on its human"
+        );
+        assert_eq!(
+            mgr.status("working"),
+            Some(Status::Idle),
+            "a child that reported and stopped is just quiet"
+        );
+
+        let _ = mgr.kill("asking");
+        let _ = mgr.kill("working");
+    }
+
+    /// The prompt heuristic, on its own, because it is the part with judgement in it and the part
+    /// that would rot silently. Everything here is output I have actually watched these CLIs print.
+    #[test]
+    fn a_question_reads_differently_from_a_finished_thought() {
+        // The shapes that mean someone is waiting on me.
+        assert!(looks_like_a_prompt("Do you want to proceed?"));
+        assert!(looks_like_a_prompt("Overwrite src/main.rs? (y/N)"));
+        assert!(looks_like_a_prompt("Apply this patch [Y/n]"));
+        assert!(looks_like_a_prompt("Continue? (yes/no)"));
+        // Trailing blank lines are normal after a prompt and must not hide it.
+        assert!(looks_like_a_prompt("Which file should I edit?\n\n  \n"));
+        // A TUI draws a cursor or a box edge after the text. The question mark is still the signal.
+        assert!(looks_like_a_prompt("Ready to continue? \u{2588}"));
+        assert!(looks_like_a_prompt("Shall I run the tests? \u{2502}"));
+
+        // The shapes that do not. An agent narrating its work is not asking me anything, even when
+        // it says the word question, and a finished summary is the common case that must stay quiet.
+        assert!(!looks_like_a_prompt("Done. 3 files changed."));
+        assert!(!looks_like_a_prompt(
+            "I considered the question of caching."
+        ));
+        assert!(!looks_like_a_prompt(""));
+        assert!(!looks_like_a_prompt("   \n\n  "));
+        // The last line is what counts: an earlier question that has since been answered and moved
+        // past must not pin the node in needs-input forever.
+        assert!(!looks_like_a_prompt(
+            "Overwrite the file? (y/N)\ny\nWrote 42 lines."
+        ));
     }
 }

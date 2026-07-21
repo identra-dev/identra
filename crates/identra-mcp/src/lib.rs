@@ -22,6 +22,7 @@ pub mod tasks;
 use std::path::{Path, PathBuf};
 
 use identra_core::canvas::Edge;
+use identra_core::text::{strip_ansi, tail};
 use identra_core::TerminalManager;
 
 /// One database per workspace for everything the bus remembers between calls: the task board and
@@ -109,71 +110,6 @@ fn edged(a: &str, b: &str, edges: &[Edge]) -> bool {
     edges
         .iter()
         .any(|e| (e.source == a && e.target == b) || (e.source == b && e.target == a))
-}
-
-/// Strip terminal escape noise, keep the readable text. Drops CSI (`ESC [ … final`) and
-/// OSC (`ESC ] … BEL|ST`) sequences, other two-byte escapes, and bare control bytes except
-/// `\n`/`\t`. Output is valid UTF-8 (lossy), so a later tail slice can't split an escape.
-fn strip_ansi(bytes: &[u8]) -> String {
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        let b = bytes[i];
-        match b {
-            0x1b => {
-                i += 1;
-                match bytes.get(i) {
-                    Some(b'[') => {
-                        // CSI: params/intermediates until a final byte in 0x40..=0x7e.
-                        i += 1;
-                        while i < bytes.len() && !(0x40..=0x7e).contains(&bytes[i]) {
-                            i += 1;
-                        }
-                        i += 1;
-                    }
-                    Some(b']') => {
-                        // OSC: runs until BEL or the ST terminator (ESC \).
-                        i += 1;
-                        while i < bytes.len() {
-                            if bytes[i] == 0x07 {
-                                i += 1;
-                                break;
-                            }
-                            if bytes[i] == 0x1b && bytes.get(i + 1) == Some(&b'\\') {
-                                i += 2;
-                                break;
-                            }
-                            i += 1;
-                        }
-                    }
-                    Some(_) => i += 1, // other ESC x: drop the pair
-                    None => {}
-                }
-            }
-            b'\n' | b'\t' => {
-                out.push(b);
-                i += 1;
-            }
-            _ if b < 0x20 || b == 0x7f => i += 1, // CR, BEL, BS, DEL, …
-            _ => {
-                out.push(b);
-                i += 1;
-            }
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-/// Last `max` bytes of `s`, snapped forward to a char boundary so the slice stays valid UTF-8.
-fn tail(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        return s.to_string();
-    }
-    let mut start = s.len() - max;
-    while start < s.len() && !s.is_char_boundary(start) {
-        start += 1;
-    }
-    s[start..].to_string()
 }
 
 #[cfg(test)]
