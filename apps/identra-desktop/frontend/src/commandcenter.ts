@@ -2,6 +2,8 @@
 // so they can be read and tested on their own. The component does the IO; this says what the IO
 // should be.
 
+import type { Task } from "./api";
+
 // What has to happen before an instruction can be dispatched.
 //
 // Three outcomes and no fourth: talk to the seat that is already there, stand one up first, or
@@ -47,4 +49,51 @@ export function composeDispatch(
 ): string {
   const body = seatIsNew ? `${brief}\n\n${instruction}` : instruction;
   return `${body}\r`;
+}
+
+// The shape of the work the seat has broken an instruction into.
+//
+// This is read off the shared board rather than asked of the seat, and that is the point: the board
+// is what the agents actually coordinate through, so a plan drawn from it is what is really
+// happening rather than what an agent said it would do.
+export type Plan = {
+  total: number;
+  done: number;
+  running: number;
+  blocked: number;
+  open: number;
+};
+
+export function summarizePlan(tasks: readonly Task[]): Plan {
+  // A task is blocked when something it named in `after` has not finished. Resolving that here
+  // rather than trusting a flag means a dependency completing is reflected the moment it lands,
+  // and it is why the board is read whole rather than counted row by row.
+  const unfinished = new Set(tasks.filter((t) => !t.done).map((t) => t.id));
+  let done = 0;
+  let running = 0;
+  let blocked = 0;
+  let open = 0;
+  for (const t of tasks) {
+    if (t.done) done++;
+    else if (t.claimedBy !== null) running++;
+    else if (t.blockedBy.some((id) => unfinished.has(id))) blocked++;
+    else open++;
+  }
+  return { total: tasks.length, done, running, blocked, open };
+}
+
+// One line of plain English for the plan, or null when there is no plan to speak of.
+//
+// Null rather than "0 steps" because an empty board is the normal state before the first
+// instruction and for any instruction small enough that the seat just did it. A bar that reports
+// zero of nothing every time it is idle trains people to stop reading it.
+export function planLine(plan: Plan): string | null {
+  if (plan.total === 0) return null;
+  const parts: string[] = [];
+  if (plan.running > 0) parts.push(`${plan.running} in progress`);
+  if (plan.blocked > 0) parts.push(`${plan.blocked} waiting on another`);
+  if (plan.open > 0) parts.push(`${plan.open} not started`);
+  if (plan.done > 0) parts.push(`${plan.done} done`);
+  const steps = plan.total === 1 ? "1 step" : `${plan.total} steps`;
+  return `${steps}: ${parts.join(", ")}`;
 }

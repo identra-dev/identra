@@ -25,8 +25,14 @@ import WorkPanel from "./WorkPanel";
 import WorkspaceMenu from "./WorkspaceMenu";
 import CommandBar, { type DispatchState } from "./CommandBar";
 import { AgentIcon } from "./icons";
-import { composeDispatch, planSeat } from "./commandcenter";
 import {
+  composeDispatch,
+  planLine,
+  planSeat,
+  summarizePlan,
+} from "./commandcenter";
+import {
+  boardList,
   canvasCommandResult,
   canvasSave,
   defaultOrchestrator,
@@ -54,6 +60,9 @@ const nodeTypes = { agent: AgentNode, browser: BrowserNode, note: NoteNode };
 // Long enough that a drag is one write rather than sixty, short enough that the window I have to
 // flush on close stays small.
 const SAVE_DEBOUNCE_MS = 400;
+// How often the command bar re-reads the board and the seat's state. Slow enough to be free, fast
+// enough that "it is asking you something" does not sit unnoticed. Only runs while a seat exists.
+const SEAT_POLL_MS = 2500;
 const DEFAULT_W = 480;
 const DEFAULT_H = 320;
 
@@ -437,6 +446,40 @@ export default function App() {
     [addNode, assignSeat, waitForTerminal],
   );
 
+  // What the seat is doing, shown next to the bar so the user does not have to read a scrolling
+  // terminal to know whether anything came of what they typed.
+  const [plan, setPlan] = useState<string | null>(null);
+  const [seatAsking, setSeatAsking] = useState(false);
+
+  // Polled rather than pushed, and only while a seat exists. The board is written by agents through
+  // the bus and the seat's status is read from output timing, so neither has an event to subscribe
+  // to. Two cheap reads every few seconds is the honest cost of showing this at all, and it stops
+  // entirely when there is no seat.
+  useEffect(() => {
+    if (seat === null) {
+      setPlan(null);
+      setSeatAsking(false);
+      return;
+    }
+    let dropped = false;
+    const poll = async () => {
+      // Both are best effort. The board can be mid-write and the seat can be closed between the
+      // check and the call, and neither is worth a visible error: the strip just keeps its last
+      // reading until the next tick.
+      const tasks = await boardList().catch(() => null);
+      const status = await terminalStatus(seat).catch(() => null);
+      if (dropped) return;
+      if (tasks !== null) setPlan(planLine(summarizePlan(tasks)));
+      setSeatAsking(status === "needs-input");
+    };
+    void poll();
+    const timer = window.setInterval(() => void poll(), SEAT_POLL_MS);
+    return () => {
+      dropped = true;
+      window.clearInterval(timer);
+    };
+  }, [seat]);
+
   const wire = useCallback(
     (from: string, to: string) => {
       setEdges((cur) => {
@@ -646,6 +689,8 @@ export default function App() {
         <CommandBar
           seatName={seatName}
           state={dispatch}
+          plan={plan}
+          awaitingAnswer={seatAsking}
           onSubmit={(instruction) => void sendToSeat(instruction)}
         />
       )}

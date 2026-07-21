@@ -290,10 +290,21 @@ body {
   background: #5e5c64;
   cursor: default;
 }
-.identra-cmd__state {
+.identra-cmd__state,
+.identra-cmd__plan {
   margin: 6px 6px 0;
   font-size: 11px;
   color: #9a9a9a;
+}
+/* The bar borrows the same aubergine a waiting node wears, so "something needs you" is one colour
+   across the canvas rather than a new vocabulary per surface. */
+.identra-cmd[data-asking="true"] {
+  border-color: var(--state-attention);
+}
+.identra-cmd__asking {
+  margin: 2px 6px 8px;
+  font-size: 11px;
+  color: color-mix(in srgb, var(--state-attention) 55%, #ffffff);
 }
 /* A failure here is the user's own instruction not arriving anywhere, so it is the one state in
    this bar that is allowed to be loud. */
