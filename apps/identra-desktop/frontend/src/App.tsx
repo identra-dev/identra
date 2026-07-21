@@ -253,8 +253,16 @@ export default function App() {
     [scheduleSave],
   );
 
+  // React Flow has already taken the node off the canvas by the time this runs, so this is where
+  // the engine side goes: the PTY, the resumed conversation, and the node's bus credential. A node
+  // that never launched has no terminal to kill and the engine says so; that is not a failure worth
+  // showing anyone, but it must not become an unhandled rejection either.
   const onNodesDelete = useCallback((deleted: FNode[]) => {
-    for (const n of deleted) void terminalKill(n.id);
+    for (const n of deleted) {
+      void terminalKill(n.id).catch((err) => {
+        console.warn(`could not close node ${n.id} cleanly`, err);
+      });
+    }
   }, []);
 
   // Returns the new node's id, because an agent that asked for this needs to be able to name it.

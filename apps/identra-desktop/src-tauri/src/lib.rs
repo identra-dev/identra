@@ -172,9 +172,14 @@ fn terminal_status(state: State<AppState>, id: String) -> Option<identra_core::t
     state.manager.status(&id)
 }
 
+/// Tear a node down completely. Everything a node owns has to go here, because this is the only
+/// path a closed node takes: the PTY and its child, the conversation it was resuming, and its bus
+/// credential. Leaving any one of them behind is the difference between closing a node and hiding
+/// it.
 #[tauri::command]
 fn terminal_kill(state: State<AppState>, id: String) -> Result<(), String> {
     session::forget(&state.dir(), &id);
+    state.bus.revoke_node(&id);
     state.manager.kill(&id).map_err(|e| e.to_string())
 }
 

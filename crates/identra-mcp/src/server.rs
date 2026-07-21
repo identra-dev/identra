@@ -235,15 +235,30 @@ impl Bus {
     /// node's CLI launches and put the result in that process's env, nowhere else: it is the one
     /// thing separating "I am node b" from "I say I am node b".
     ///
-    /// A relaunched node gets a fresh token and the old one stays mapped. That is harmless, the old
-    /// token names the same node, and it saves tracking which of a node's launches is current.
+    /// Issuing retires whatever this node held before, so a node has exactly one live token at a
+    /// time. The launch path kills the old child before starting the new one, so there is never a
+    /// process still holding the retired secret, and one-token-per-node means the map cannot grow
+    /// without bound across a long session of restarts.
     pub fn issue_token(&self, node_id: &str) -> String {
         let token = random_token();
+        let mut tokens = self.tokens.lock().unwrap();
+        tokens.retain(|_, owner| owner != node_id);
+        tokens.insert(token.clone(), node_id.to_string());
+        token
+    }
+
+    /// Drop every token naming `node_id`, so nothing can speak as it any more.
+    ///
+    /// This is what closing a node has to do. Without it a killed agent's secret stays valid for the
+    /// life of the app: the edge-gated tools would find no edges and refuse, but the tools that need
+    /// no wire (memory, the board, listing the canvas) would still answer a node that no longer
+    /// exists. A credential that outlives the thing it names is worth removing even when the blast
+    /// radius is small.
+    pub fn revoke_node(&self, node_id: &str) {
         self.tokens
             .lock()
             .unwrap()
-            .insert(token.clone(), node_id.to_string());
-        token
+            .retain(|_, owner| owner != node_id);
     }
 
     fn node_for(&self, token: &str) -> Option<String> {
@@ -1197,6 +1212,39 @@ mod tests {
             Some(a.as_str())
         );
         assert_eq!(header(&HeaderMap::new(), config::TOKEN_HEADER), None);
+    }
+
+    /// A node's credential must not outlive the node. Closing one is the case that matters, and
+    /// restarting one is the case that would otherwise pile up tokens for the life of the app.
+    #[test]
+    fn a_closed_node_cannot_still_speak_as_itself() {
+        let bus = bus_in(std::env::temp_dir());
+        let a = bus.issue_token("node-a");
+        let b = bus.issue_token("node-b");
+
+        bus.revoke_node("node-a");
+        assert_eq!(
+            bus.node_for(&a),
+            None,
+            "a closed node's secret stops naming it"
+        );
+        assert_eq!(
+            bus.node_for(&b).as_deref(),
+            Some("node-b"),
+            "and closing one node leaves every other node alone"
+        );
+
+        // Relaunching retires the previous secret rather than leaving both live, so a node has one
+        // token at a time and a long session of restarts does not grow the map.
+        let first = bus.issue_token("node-c");
+        let second = bus.issue_token("node-c");
+        assert_ne!(first, second);
+        assert_eq!(bus.node_for(&first), None);
+        assert_eq!(bus.node_for(&second).as_deref(), Some("node-c"));
+
+        // Revoking something that was never there is a no-op, which is what the delete path needs:
+        // a node the user closed before it ever launched has no token to remove.
+        bus.revoke_node("node-never-existed");
     }
 
     #[tokio::test]
