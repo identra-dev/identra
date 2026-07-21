@@ -977,6 +977,41 @@ body {
 
 /* Closing a node is the only way to remove one now, so it has to be reachable. Quiet until you are
    on the node, red once you are on the button: destructive, but not shouting from across the room. */
+/* Sits to the left of close and behaves the same way: out of sight until you are on the node, so a
+   row of nodes is terminals rather than chrome. The exception is a node that is actually locked,
+   which stays visible, because a protection you cannot see is one you cannot trust. */
+.identra-node__lock {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: #6b6b6b;
+  font: inherit;
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 8px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease-out;
+}
+.identra-node:hover .identra-node__lock {
+  opacity: 1;
+}
+.identra-node__lock:hover {
+  color: var(--text);
+  border-color: var(--panel-edge);
+}
+.identra-node__lock[data-on="true"] {
+  opacity: 1;
+  color: #e6d4e4;
+  border-color: var(--state-attention);
+  background: color-mix(in srgb, var(--state-attention) 26%, transparent);
+}
+/* Close keeps its own right-edge position; the lock takes over pushing the pair over. */
+.identra-node__lock + .identra-node__close {
+  margin-left: 4px;
+}
+
 .identra-node__close {
   margin-left: auto;
   background: transparent;

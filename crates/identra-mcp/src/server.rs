@@ -1472,6 +1472,7 @@ mod tests {
                     height: 320.0,
                     title: "spawner".into(),
                     cwd: Some(base.display().to_string()),
+                    locked: false,
                 },
                 Node {
                     id: "helper".into(),
@@ -1482,6 +1483,7 @@ mod tests {
                     height: 320.0,
                     title: "helper".into(),
                     cwd: Some(out.path.display().to_string()),
+                    locked: false,
                 },
             ],
             edges: vec![Edge {
@@ -1529,6 +1531,7 @@ mod tests {
                     height: 320.0,
                     title: "Tests".into(),
                     cwd: None,
+                    locked: false,
                 }],
                 ..Canvas::default()
             },
@@ -1588,6 +1591,7 @@ mod tests {
             height: 320.0,
             title: title.into(),
             cwd: None,
+            locked: false,
         };
         canvas::save(
             &dir,
@@ -1663,6 +1667,7 @@ mod tests {
                     height: 320.0,
                     title: "Lead".into(),
                     cwd: None,
+                    locked: false,
                 }],
                 ..Canvas::default()
             },
@@ -1818,6 +1823,7 @@ mod tests {
             height: 320.0,
             title: title.into(),
             cwd: None,
+            locked: false,
         };
         let canvas = Canvas {
             nodes: vec![node("a", "Route"), node("b", "Tests")],

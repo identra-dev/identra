@@ -47,6 +47,7 @@ fn node(id: &str, title: &str) -> Node {
         height: 320.0,
         title: title.into(),
         cwd: None,
+        locked: false,
     }
 }
 

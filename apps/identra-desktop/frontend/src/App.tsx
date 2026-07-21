@@ -75,7 +75,7 @@ function toFlow(n: CanvasNode): FNode {
     id: n.id,
     type: n.kind === "browser" || n.kind === "note" ? n.kind : "agent",
     position: { x: n.x, y: n.y },
-    data: { title: n.title, cwd: n.cwd, kind: n.kind },
+    data: { title: n.title, cwd: n.cwd, kind: n.kind, locked: n.locked },
     style: { width: n.width || DEFAULT_W, height: n.height || DEFAULT_H },
   };
 }
@@ -90,6 +90,7 @@ function toCanvasNode(n: FNode): CanvasNode {
     height: Number(n.style?.height) || DEFAULT_H,
     title: n.data.title || n.data.kind,
     cwd: n.data.cwd ?? null,
+    locked: n.data.locked === true,
   };
 }
 
@@ -257,6 +258,25 @@ export default function App() {
     });
   }, [scheduleSave]);
 
+  // Close a node to agents, or open it again. The user's own hands are never restricted by this:
+  // they can still wire a locked node themselves, because it is their canvas and the lock is about
+  // what happens while they are not watching.
+  const toggleLock = useCallback(
+    (nodeId: string) => {
+      setNodes((cur) => {
+        const next = cur.map((n) =>
+          n.id === nodeId
+            ? { ...n, data: { ...n.data, locked: n.data.locked !== true } }
+            : n,
+        );
+        nodesRef.current = next;
+        scheduleSave();
+        return next;
+      });
+    },
+    [scheduleSave],
+  );
+
   // Moving the seat is one write. Nothing is spawned or killed here: the seat is a role, so taking
   // it from a node leaves that node running exactly as it was, just no longer the one the command
   // bar talks to.
@@ -371,6 +391,7 @@ export default function App() {
             height: DEFAULT_H,
             title,
             cwd,
+            locked: false,
           }),
         ];
         nodesRef.current = next;
@@ -530,9 +551,22 @@ export default function App() {
   // An agent asking the canvas to change. The canvas is the single writer of its own state, so the
   // engine sends the request here rather than editing canvas.json underneath us, and we answer.
   // Every branch must reply exactly once: an agent is blocked on this until it hears back.
+  //
+  // This is also the one place a node's lock is enforced, and it is the right place: it is the only
+  // door an agent has onto the canvas. The user's own drags go through onConnect and are never
+  // checked, which is the intended asymmetry.
   const applyCanvasCommand = useCallback(
     (cmd: CanvasCommand): CanvasResult => {
       const p = cmd.params;
+      const locked = (id?: string) =>
+        nodesRef.current.some((n) => n.id === id && n.data.locked === true);
+      // Named, so the agent can tell the user which node it was and they can decide, rather than
+      // just reporting that something was refused.
+      const lockedReason = (id: string) => {
+        const name =
+          nodesRef.current.find((n) => n.id === id)?.data.title ?? id;
+        return `${name} is locked, so it cannot be wired to by an agent. The person at the keyboard can unlock it or wire it themselves.`;
+      };
       switch (cmd.action) {
         case "add_terminal": {
           const kind = typeof p.kind === "string" ? p.kind : "codex";
@@ -555,6 +589,15 @@ export default function App() {
           const at = parent
             ? { x: parent.position.x, y: parent.position.y + DEFAULT_H + 60 }
             : undefined;
+          // Refuse before spawning, not after. Creating the node and then failing to wire it would
+          // leave a stray agent running on the user's canvas that nobody asked for and nobody owns.
+          if (
+            typeof p.connectTo === "string" &&
+            p.connectTo &&
+            locked(p.connectTo)
+          ) {
+            return { ok: false, error: lockedReason(p.connectTo) };
+          }
           const title =
             typeof p.title === "string" && p.title ? p.title : known.name;
           const id = addNode(kind, title, null, at);
@@ -566,7 +609,15 @@ export default function App() {
           const { from, to } = p as { from?: string; to?: string };
           const has = (id?: string) =>
             nodesRef.current.some((n) => n.id === id);
-          if (!has(from) || !has(to)) {
+          // Checking for undefined here as well as membership is what narrows both to a string for
+          // the rest of the branch, so the wire call below needs no cast to say what it already
+          // knows.
+          if (
+            from === undefined ||
+            to === undefined ||
+            !has(from) ||
+            !has(to)
+          ) {
             return {
               ok: false,
               error: "one of those nodes is not on the canvas",
@@ -574,7 +625,11 @@ export default function App() {
           }
           if (from === to)
             return { ok: false, error: "a node cannot be wired to itself" };
-          wire(from as string, to as string);
+          // Either end being locked is enough to refuse. An edge is the bus authorization and it
+          // reads both ways, so wiring out of a locked node exposes it exactly as much as wiring in.
+          if (locked(from)) return { ok: false, error: lockedReason(from) };
+          if (locked(to)) return { ok: false, error: lockedReason(to) };
+          wire(from, to);
           return { ok: true, id: `${from}->${to}` };
         }
         case "add_note": {
@@ -614,12 +669,13 @@ export default function App() {
   // written back to canvas.json as part of a node.
   const flowNodes = useMemo(
     () =>
-      nodes.map((n) =>
-        n.id === seat
-          ? { ...n, data: { ...n.data, seat: true }, className: "is-seat" }
-          : n,
-      ),
-    [nodes, seat],
+      nodes.map((n) => {
+        const data = { ...n.data, onToggleLock: toggleLock };
+        return n.id === seat
+          ? { ...n, data: { ...data, seat: true }, className: "is-seat" }
+          : { ...n, data };
+      }),
+    [nodes, seat, toggleLock],
   );
 
   const seatName =

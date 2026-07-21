@@ -21,6 +21,15 @@ pub struct Node {
     pub title: String,
     #[serde(default)]
     pub cwd: Option<String>,
+    /// The user has closed this node to changes made by agents.
+    ///
+    /// It stops agents wiring anything to it, which is a stronger guarantee than it first sounds:
+    /// an edge is the bus authorization, so refusing new edges is what keeps this node's transcript
+    /// out of reach of an agent that would otherwise wire itself in and read it. The user's own
+    /// hands are not restricted, because this is their canvas and the lock is about what happens
+    /// while they are not looking.
+    #[serde(default)]
+    pub locked: bool,
 }
 
 /// A wire between two nodes. The edge is also the authorization for the context bus: two nodes
@@ -219,6 +228,7 @@ mod tests {
                 height: 320.0,
                 title: "codex".into(),
                 cwd: Some("/tmp".into()),
+                locked: true,
             }],
             edges: vec![Edge {
                 id: "e1".into(),

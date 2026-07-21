@@ -26,6 +26,10 @@ export type CanvasNode = {
   height: number;
   title: string;
   cwd: string | null;
+  // The user has closed this node to changes made by agents. It stops agents wiring anything to it,
+  // which matters more than it sounds: an edge is the bus authorization, so refusing new edges is
+  // what keeps this node's transcript out of reach of an agent that would wire itself in to read it.
+  locked: boolean;
 };
 
 export type Edge = { id: string; source: string; target: string };

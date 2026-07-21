@@ -351,6 +351,7 @@ mod tests {
             height: 320.0,
             title: "codex".into(),
             cwd: None,
+            locked: false,
         });
         canvas::save(&repo, &board).unwrap();
         let again = adopt(&repo).unwrap();

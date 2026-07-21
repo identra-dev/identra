@@ -25,7 +25,11 @@ export type AgentNodeData = {
   title: string;
   cwd: string | null;
   kind: string;
+  locked?: boolean;
   seat?: boolean;
+  // Stamped on by App along with `seat`. A stable callback, so it does not break the memo on this
+  // component every time App re-renders for something unrelated.
+  onToggleLock?: (id: string) => void;
 };
 
 function AgentNodeImpl({ id, data }: NodeProps) {
@@ -241,6 +245,24 @@ function AgentNodeImpl({ id, data }: NodeProps) {
           >
             command center
           </span>
+        )}
+        {nodeData.onToggleLock !== undefined && (
+          // Always visible once locked, hover-only when open, the same as the close button. A lock
+          // that hides itself is a setting the user cannot tell is on, and the whole value of this
+          // is knowing at a glance which nodes agents cannot touch.
+          <button
+            className="identra-node__lock nodrag"
+            data-on={nodeData.locked === true}
+            title={
+              nodeData.locked === true
+                ? "Locked: agents cannot wire anything to this node. Click to unlock."
+                : "Lock this node so agents cannot wire anything to it."
+            }
+            aria-pressed={nodeData.locked === true}
+            onClick={() => nodeData.onToggleLock?.(id)}
+          >
+            {nodeData.locked === true ? "locked" : "lock"}
+          </button>
         )}
         <button
           className="identra-node__close nodrag"
