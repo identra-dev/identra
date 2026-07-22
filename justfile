@@ -20,7 +20,9 @@ test:
     # train. Word matching is the path this exercises, and it is a real path: it is what someone
     # offline gets. Meaning based ranking is checked by hand with the recall-check recipe.
     IDENTRA_EMBEDDINGS=off cargo test --workspace
-    cd apps/identra-desktop/frontend && bun test
+    # The production build too, not just the tests. Type errors that only vite's build surfaces are
+    # otherwise found by CI on the tag rather than here.
+    cd apps/identra-desktop/frontend && bun run build && bun test
 
 # See recall work against the real model. Fetches it on the first run, then works offline.
 recall-check:
@@ -33,7 +35,10 @@ fmt:
 
 # lint everything, warnings fail the build
 lint:
-    cargo clippy --workspace -- -D warnings
+    # --all-targets, because without it clippy skips test code and CI does not. A lint that only
+    # fails on the tag is a lint that fails at the worst possible moment, so this matches
+    # .github/workflows/build.yml exactly.
+    cargo clippy --workspace --all-targets -- -D warnings
     cd apps/identra-desktop/frontend && bun run lint
 
 # the gate i run before every commit: format, lint, test

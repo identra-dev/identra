@@ -366,7 +366,7 @@ mod tests {
     /// quietly wipe the user's real one instead of failing.
     #[test]
     fn import_refuses_anything_that_is_not_ours() {
-        assert_eq!(import("not json at all").is_err(), true);
+        assert!(import("not json at all").is_err());
         // A perfectly good JSON object, and the exact shape that would otherwise import as a blank
         // board and destroy the canvas it replaced.
         assert_eq!(
