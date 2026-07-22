@@ -1561,3 +1561,45 @@ body {
   color: var(--text);
   cursor: default;
 }
+
+/* The update strip. Fixed to the top edge, above the save-error banner's plane, in the accent
+   rather than a warning colour: an update is good news, quietly told. */
+.identra-update {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  border-radius: 0 0 8px 8px;
+  background: #77216f;
+  color: #f2e6f0;
+  font-size: 12px;
+}
+.identra-update__go {
+  background: #fff;
+  color: #77216f;
+  border: none;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.identra-update__later {
+  background: transparent;
+  color: inherit;
+  border: none;
+  padding: 3px 4px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0.75;
+}
+.identra-update__later:hover {
+  opacity: 1;
+}

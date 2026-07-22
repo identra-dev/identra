@@ -104,6 +104,10 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Signs the updater artifacts. Without the signature an installed build refuses the
+          # update, which is the point of the key: only releases cut here can update anyone.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         with:
           projectPath: apps/identra-desktop
           args: ${{ matrix.target && format('--target {0}', matrix.target) || '' }}

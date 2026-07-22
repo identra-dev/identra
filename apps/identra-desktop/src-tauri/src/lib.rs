@@ -602,6 +602,7 @@ fn workspace_delete(state: State<AppState>, slug: String) -> Result<(), String> 
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             // The sink emits each output chunk to the webview as it arrives.
             let handle: AppHandle = app.handle().clone();
