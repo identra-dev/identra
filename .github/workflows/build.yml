@@ -76,20 +76,24 @@ jobs:
             target: ""
             name: linux
             bundles: target/release/bundle
-          # Apple Silicon and Intel as one binary, so there is one download and no way to pick wrong.
+          # Apple Silicon only, and the first tagged run is why: the embeddings model runtime
+          # (ort, under fastembed) ships no prebuilt for x86_64-apple-darwin, so a universal
+          # build cannot link its Intel half. Every Mac sold since 2020 is covered; Intel Macs
+          # come back if ort grows the prebuilt or someone demonstrably needs them enough to pay
+          # for an ONNX source build in CI.
           - os: macos-latest
-            target: universal-apple-darwin
+            target: aarch64-apple-darwin
             name: macos
             # A --target build nests its bundles under the triple rather than release/, so the path
             # differs per matrix leg and is not something to hardcode once and get wrong.
-            bundles: target/universal-apple-darwin/release/bundle
+            bundles: target/aarch64-apple-darwin/release/bundle
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: macOS targets
         if: matrix.name == 'macos'
-        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+        run: rustup target add aarch64-apple-darwin
       - uses: Swatinem/rust-cache@v2
       - uses: oven-sh/setup-bun@v2
       - name: System deps
