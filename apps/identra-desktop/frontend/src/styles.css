@@ -465,8 +465,8 @@ body {
 .identra-picker__row {
   width: 100%;
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  gap: 12px;
   text-align: left;
   background: transparent;
   border: 1px solid transparent;
@@ -479,6 +479,39 @@ body {
 .identra-picker__row:hover {
   background: var(--header);
   border-color: var(--panel-edge);
+}
+/* The name and path stack beside the thumbnail. min-width lets the path ellipsis work: a flex
+   child refuses to shrink below its content without it, and paths are long. */
+.identra-picker__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+/* The board at postage-stamp size, on its own wallpaper. Same scrim rule as the real canvas. */
+.identra-preview {
+  position: relative;
+  flex: none;
+  width: 96px;
+  height: 60px;
+  border: 1px solid var(--panel-edge);
+  border-radius: 4px;
+  overflow: hidden;
+  background-size: cover;
+  background-position: center;
+}
+.identra-preview[data-scrim]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--wallpaper-scrim);
+}
+/* Above the scrim: the scrim dims the picture, and the node shapes are the point of the tile,
+   so they draw on top of it exactly as real nodes sit above the real canvas. */
+.identra-preview svg {
+  position: relative;
+  z-index: 1;
+  display: block;
 }
 .identra-picker__name {
   font-size: 14px;

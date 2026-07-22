@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import BoardPreview from "./BoardPreview";
 import {
   workspaceCreate,
   workspaceList,
@@ -82,8 +83,13 @@ export default function WorkspacePicker({
                   onClick={() => onOpen(w)}
                   disabled={busy}
                 >
-                  <span className="identra-picker__name">{w.title}</span>
-                  <span className="identra-picker__path">{w.path}</span>
+                  {/* The thumbnail is how you tell two workspaces apart faster than reading
+                      paths: the board's own shape, on its own wallpaper. */}
+                  <BoardPreview canvas={w.canvas} />
+                  <span className="identra-picker__text">
+                    <span className="identra-picker__name">{w.title}</span>
+                    <span className="identra-picker__path">{w.path}</span>
+                  </span>
                 </button>
               </li>
             ))}

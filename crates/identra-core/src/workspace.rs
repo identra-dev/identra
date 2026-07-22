@@ -18,11 +18,17 @@ use crate::canvas::{self, Canvas};
 
 /// What the workspace picker needs to draw a row. `path` is absolute so the frontend can show the
 /// real location, since a workspace being a real folder on disk is the point.
+///
+/// The whole canvas rides along, not a distilled preview shape. Every constructor here was
+/// already loading it for the title, the picker draws its thumbnail from the nodes and the
+/// wallpaper, and one struct that cannot drift beats a second one that mirrors it. It only ever
+/// crosses local IPC into the user's own window, so the extra weight is bytes, not exposure.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct WorkspaceMeta {
     pub slug: String,
     pub title: String,
     pub path: String,
+    pub canvas: Canvas,
 }
 
 pub const DEFAULT_TITLE: &str = "untitled-workspace";
@@ -80,10 +86,12 @@ pub fn free_slug(root: &Path, base: &str) -> String {
 
 fn meta_for(root: &Path, slug: &str) -> WorkspaceMeta {
     let path = root.join(slug);
+    let board = canvas::load(&path);
     WorkspaceMeta {
-        title: canvas::load(&path).title,
+        title: board.title.clone(),
         slug: slug.to_string(),
         path: path.display().to_string(),
+        canvas: board,
     }
 }
 
@@ -123,6 +131,7 @@ pub fn create(root: &Path, title: &str) -> io::Result<WorkspaceMeta> {
         slug,
         title: title.to_string(),
         path: path.display().to_string(),
+        canvas: board,
     })
 }
 
@@ -173,10 +182,14 @@ pub fn recents() -> Vec<WorkspaceMeta> {
     read_recents(&file)
         .into_iter()
         .filter(|p| canvas::canvas_path(p).is_file())
-        .map(|p| WorkspaceMeta {
-            slug: p.display().to_string(),
-            title: canvas::load(&p).title,
-            path: p.display().to_string(),
+        .map(|p| {
+            let board = canvas::load(&p);
+            WorkspaceMeta {
+                slug: p.display().to_string(),
+                title: board.title.clone(),
+                path: p.display().to_string(),
+                canvas: board,
+            }
         })
         .collect()
 }
@@ -222,10 +235,12 @@ pub fn adopt(path: &Path) -> io::Result<WorkspaceMeta> {
         let _ = write_recents(&file, &list);
     }
 
+    let board = canvas::load(path);
     Ok(WorkspaceMeta {
         slug: path.display().to_string(),
-        title: canvas::load(path).title,
+        title: board.title.clone(),
         path: path.display().to_string(),
+        canvas: board,
     })
 }
 
@@ -285,6 +300,7 @@ pub fn rename(root: &Path, slug: &str, title: &str) -> io::Result<WorkspaceMeta>
         slug: to_slug,
         title: title.to_string(),
         path: to.display().to_string(),
+        canvas: board,
     })
 }
 

@@ -57,8 +57,15 @@ export type Canvas = {
 };
 
 // A workspace is a folder: `path` is where it really lives, `slug` is the folder name and the id,
-// `title` is what the user reads.
-export type WorkspaceMeta = { slug: string; title: string; path: string };
+// `title` is what the user reads. The canvas rides along so the picker can draw a thumbnail of
+// the board without a second command; it is a snapshot from listing time, and opening still loads
+// fresh from the engine.
+export type WorkspaceMeta = {
+  slug: string;
+  title: string;
+  path: string;
+  canvas: Canvas;
+};
 
 // Identra made it (under the workspaces root) versus you opened a folder you already had. The two
 // behave differently in exactly one place that matters: Identra's are Identra's to delete, and
