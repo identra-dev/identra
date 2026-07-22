@@ -11,10 +11,12 @@
 //! - [`wallpaper`]: the shared image library the canvas backgrounds draw from.
 //! - [`settings`]: what is true of this machine, as one small file.
 //! - [`devserver`]: which command runs a project's dev server.
+//! - [`fileview`]: read a workspace file for the viewer node, and only a workspace file.
 
 pub mod agents;
 pub mod canvas;
 pub mod devserver;
+pub mod fileview;
 pub mod session;
 pub mod settings;
 pub mod terminal;

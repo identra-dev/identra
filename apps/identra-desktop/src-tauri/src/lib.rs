@@ -333,6 +333,17 @@ fn dev_command(state: State<AppState>) -> Option<Vec<String>> {
     identra_core::devserver::command_for(&state.dir())
 }
 
+/// Read a file for the viewer node. The engine refuses anything that does not resolve inside
+/// the active workspace, which is what makes it safe to accept a path from the window: on this
+/// command a path is an agent's word as easily as the user's.
+#[tauri::command]
+fn file_read(
+    state: State<AppState>,
+    path: String,
+) -> Result<identra_core::fileview::FileView, String> {
+    identra_core::fileview::read(&state.dir(), Path::new(&path)).map_err(|e| e.to_string())
+}
+
 /// What is true of this machine, for the settings panel to show.
 #[tauri::command]
 fn settings_get() -> identra_core::settings::Settings {
@@ -648,6 +659,7 @@ pub fn run() {
             memory_list,
             memory_search,
             dev_command,
+            file_read,
             settings_get,
             settings_set,
             wallpapers_list,

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ReactFlow,
@@ -20,6 +21,7 @@ import "@xyflow/react/dist/style.css";
 import "@xterm/xterm/css/xterm.css";
 import AgentNode, { type AgentNodeData } from "./AgentNode";
 import BrowserNode from "./BrowserNode";
+import FileNode from "./FileNode";
 import NoteNode from "./NoteNode";
 import Onboarding from "./Onboarding";
 import WorkspacePicker from "./WorkspacePicker";
@@ -67,7 +69,12 @@ import {
 
 type FNode = Node<AgentNodeData>;
 
-const nodeTypes = { agent: AgentNode, browser: BrowserNode, note: NoteNode };
+const nodeTypes = {
+  agent: AgentNode,
+  browser: BrowserNode,
+  note: NoteNode,
+  file: FileNode,
+};
 // Long enough that a drag is one write rather than sixty, short enough that the window I have to
 // flush on close stays small.
 const SAVE_DEBOUNCE_MS = 400;
@@ -82,7 +89,10 @@ const DEFAULT_H = 320;
 function toFlow(n: CanvasNode): FNode {
   return {
     id: n.id,
-    type: n.kind === "browser" || n.kind === "note" ? n.kind : "agent",
+    type:
+      n.kind === "browser" || n.kind === "note" || n.kind === "file"
+        ? n.kind
+        : "agent",
     position: { x: n.x, y: n.y },
     data: { title: n.title, cwd: n.cwd, kind: n.kind, locked: n.locked },
     style: { width: n.width || DEFAULT_W, height: n.height || DEFAULT_H },
@@ -652,6 +662,33 @@ export default function App() {
     },
     [scheduleSave],
   );
+
+  // Dropping a file from the OS onto the canvas opens it in a viewer node at the drop point.
+  // This is the user's own door to the viewer; the engine still refuses anything outside the
+  // workspace, and the node shows that refusal rather than this handler pre-judging it.
+  const workspaceOpenRef = useRef(false);
+  workspaceOpenRef.current = workspace !== null;
+  useEffect(() => {
+    const un = getCurrentWebview().onDragDropEvent((event) => {
+      // Before a workspace is open there is no canvas to put a node on, and no folder for the
+      // containment rule to mean anything against.
+      if (event.payload.type !== "drop" || !workspaceOpenRef.current) return;
+      const { paths, position } = event.payload;
+      // Physical pixels from the webview, logical in the browser, flow coords on the board.
+      const dpr = window.devicePixelRatio || 1;
+      const vp = viewport.current;
+      paths.forEach((path, i) => {
+        const name = path.split("/").pop() ?? path;
+        addNode("file", name, path, {
+          x: (position.x / dpr - vp.x) / vp.zoom + i * 28,
+          y: (position.y / dpr - vp.y) / vp.zoom + i * 28,
+        });
+      });
+    });
+    return () => {
+      void un.then((f) => f());
+    };
+  }, [addNode]);
 
   // The click on a dev node's address badge. A browser node opens beside the server, wired to it
   // so the pair reads as one thing. Clicking again stacks nothing: if a browser node is already

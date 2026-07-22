@@ -193,6 +193,19 @@ export const memorySearch = (query: string, limit?: number) =>
 // does not declare one. Read per workspace: the Run control exists exactly when this answers.
 export const devCommand = () => invoke<string[] | null>("dev_command");
 
+// What the file viewer renders, mirroring identra-core fileview.rs. Image bytes arrive as a
+// plain array and become a blob URL on this side, which keeps base64 out of both.
+export type FileView =
+  | { kind: "text"; name: string; text: string }
+  | { kind: "image"; name: string; bytes: number[] }
+  | { kind: "binary"; name: string; size: number }
+  | { kind: "toobig"; name: string; size: number };
+
+// Refuses any path that does not resolve inside the active workspace; the rejection carries the
+// reason and the viewer shows it.
+export const fileRead = (path: string) =>
+  invoke<FileView>("file_read", { path });
+
 // What is true of this machine, as opposed to of one workspace. Mirrors identra-core settings.rs.
 export type Settings = {
   // Recall by meaning: on fetches a local model once (about 130MB), off matches by words and

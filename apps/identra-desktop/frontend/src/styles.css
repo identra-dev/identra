@@ -1447,3 +1447,32 @@ body {
 .identra-focus__term .xterm {
   height: 100%;
 }
+
+/* The file viewer's body. Recessed like a terminal well, but neutral: this is a document, not a
+   console, and tinting it aubergine would say something is running in it. */
+.identra-file {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: #1d1d1d;
+  padding: 10px 12px;
+}
+.identra-file__text {
+  margin: 0;
+  font-family: Ubuntu Mono, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #e6e6e6;
+}
+.identra-file__image {
+  max-width: 100%;
+  display: block;
+}
+.identra-file__state {
+  margin: 0;
+  color: #9a9a9a;
+  font-size: 12px;
+  line-height: 1.5;
+}
