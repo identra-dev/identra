@@ -362,7 +362,8 @@ body {
 }
 
 /* The dev server's detected address, worn on the node like the seat badge, in the running green.
-   It can be long, so it gives way (ellipsis) before the close button does. */
+   A button, because clicking it opens the page in a browser node. It can be long, so it gives
+   way (ellipsis) before the close button does. */
 .identra-node__preview {
   flex: 1;
   min-width: 0;
@@ -373,8 +374,14 @@ body {
   background: color-mix(in srgb, #26a269 24%, transparent);
   border: 1px solid #26a269;
   color: #b7e6cd;
+  font: inherit;
   font-size: 10px;
   white-space: nowrap;
+  text-align: left;
+  cursor: pointer;
+}
+.identra-node__preview:hover {
+  background: color-mix(in srgb, #26a269 40%, transparent);
 }
 
 /* Launcher tile: icon over label, a small auth dot in the corner. The three data-states read as

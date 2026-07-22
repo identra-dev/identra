@@ -32,6 +32,9 @@ export type AgentNodeData = {
   // Stamped on by App along with `seat`. A stable callback, so it does not break the memo on this
   // component every time App re-renders for something unrelated.
   onToggleLock?: (id: string) => void;
+  // Stamped on the same way. A dev-server node calls it when the user clicks the address badge,
+  // and App answers by standing a browser node up next to it.
+  onOpenPreview?: (id: string, url: string) => void;
 };
 
 function AgentNodeImpl({ id, data }: NodeProps) {
@@ -304,14 +307,16 @@ function AgentNodeImpl({ id, data }: NodeProps) {
           </span>
         )}
         {previewUrl !== null && (
-          // The server's own address, read from its banner. Where the page actually is beats a
-          // vague "running": this is the line the user would otherwise squint at the terminal for.
-          <span
-            className="identra-node__preview"
-            title="The dev server is serving here"
+          // The server's own address, read from its banner, and the one-click way to see the
+          // page: clicking stands a browser node up next to this one. The offer is a click the
+          // user takes, never a node that appears uninvited.
+          <button
+            className="identra-node__preview nodrag"
+            title="The dev server is serving here. Click to open it in a browser node."
+            onClick={() => nodeData.onOpenPreview?.(id, previewUrl)}
           >
             {previewUrl}
-          </span>
+          </button>
         )}
         {nodeData.onToggleLock !== undefined && (
           // Always visible once locked, hover-only when open, the same as the close button. A lock

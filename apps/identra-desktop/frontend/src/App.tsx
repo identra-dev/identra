@@ -646,6 +646,28 @@ export default function App() {
     [scheduleSave],
   );
 
+  // The click on a dev node's address badge. A browser node opens beside the server, wired to it
+  // so the pair reads as one thing. Clicking again stacks nothing: if a browser node is already
+  // showing that address, there is nothing left to offer.
+  const openPreview = useCallback(
+    (devId: string, url: string) => {
+      const already = nodesRef.current.some(
+        (n) => n.data.kind === "browser" && n.data.cwd === url,
+      );
+      if (already) return;
+      const dev = nodesRef.current.find((n) => n.id === devId);
+      const at = dev
+        ? {
+            x: dev.position.x + (Number(dev.style?.width) || DEFAULT_W) + 60,
+            y: dev.position.y,
+          }
+        : undefined;
+      const browserId = addNode("browser", "Preview", url, at);
+      if (dev) wire(devId, browserId);
+    },
+    [addNode, wire],
+  );
+
   // An agent asking the canvas to change. The canvas is the single writer of its own state, so the
   // engine sends the request here rather than editing canvas.json underneath us, and we answer.
   // Every branch must reply exactly once: an agent is blocked on this until it hears back.
@@ -768,12 +790,16 @@ export default function App() {
   const flowNodes = useMemo(
     () =>
       nodes.map((n) => {
-        const data = { ...n.data, onToggleLock: toggleLock };
+        const data = {
+          ...n.data,
+          onToggleLock: toggleLock,
+          onOpenPreview: openPreview,
+        };
         return n.id === seat
           ? { ...n, data: { ...data, seat: true }, className: "is-seat" }
           : { ...n, data };
       }),
-    [nodes, seat, toggleLock],
+    [nodes, seat, toggleLock, openPreview],
   );
 
   const seatName =
