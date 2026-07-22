@@ -44,6 +44,7 @@ import {
   canvasImport,
   canvasSave,
   defaultOrchestrator,
+  devCommand,
   detectAgents,
   isAdopted,
   noAgentsInstalled,
@@ -108,6 +109,8 @@ export default function App() {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [panelOpen, setPanelOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // The dev command this workspace declares, or null. Existence is what the Run button keys on.
+  const [devCmd, setDevCmd] = useState<string[] | null>(null);
   // Set when a write to disk fails. The board is on screen and not saved, and the only wrong move
   // is to say nothing.
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -202,6 +205,10 @@ export default function App() {
     setEdges(canvas.edges);
     viewport.current = canvas.viewport;
     setWorkspace(w);
+    // Whether this project declares a dev command decides whether the Run control exists at all.
+    // Probed per open, because it is a property of the folder, not of the app.
+    setDevCmd(null);
+    void devCommand().then(setDevCmd, () => setDevCmd(null));
   }, []);
 
   // The whole board, from the refs, so a save always writes a consistent nodes+edges pair.
@@ -893,6 +900,17 @@ export default function App() {
         >
           Work
         </button>
+        {/* One dev server per workspace: the button is the way to start it, so the button goes
+            while one is on the board. Stopping is closing the node, like everything else. */}
+        {devCmd !== null && !nodes.some((n) => n.data.kind === "dev") && (
+          <button
+            className="identra-topbar__btn"
+            onClick={() => addNode("dev", "Dev server")}
+            title={`Start the dev server: ${devCmd.join(" ")}`}
+          >
+            Run
+          </button>
+        )}
         {/* Both are hidden on an empty canvas. There is nothing to tidy and nothing to map, and a
             row of controls that do nothing is how an empty state stops reading as a first run. */}
         {nodes.length > 0 && (

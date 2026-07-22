@@ -326,6 +326,13 @@ fn memory_search(
         .map_err(|e| e.to_string())
 }
 
+/// The command that starts this workspace's dev server, or null when the project does not
+/// declare one. The UI shows a Run button exactly when this answers.
+#[tauri::command]
+fn dev_command(state: State<AppState>) -> Option<Vec<String>> {
+    identra_core::devserver::command_for(&state.dir())
+}
+
 /// What is true of this machine, for the settings panel to show.
 #[tauri::command]
 fn settings_get() -> identra_core::settings::Settings {
@@ -640,6 +647,7 @@ pub fn run() {
             board_list,
             memory_list,
             memory_search,
+            dev_command,
             settings_get,
             settings_set,
             wallpapers_list,

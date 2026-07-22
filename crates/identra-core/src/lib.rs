@@ -10,9 +10,11 @@
 //! - [`text`]: read PTY bytes as text, which both the terminal and the bus need.
 //! - [`wallpaper`]: the shared image library the canvas backgrounds draw from.
 //! - [`settings`]: what is true of this machine, as one small file.
+//! - [`devserver`]: which command runs a project's dev server.
 
 pub mod agents;
 pub mod canvas;
+pub mod devserver;
 pub mod session;
 pub mod settings;
 pub mod terminal;

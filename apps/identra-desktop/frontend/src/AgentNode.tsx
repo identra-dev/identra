@@ -4,6 +4,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import {
   agentsByKind,
+  devCommand,
   memoryList,
   onExit,
   onOutput,
@@ -15,6 +16,7 @@ import {
   type Memory,
   type OutputEvent,
 } from "./api";
+import { appendTail, findLocalUrl } from "./devurl";
 import { pastSnapshot } from "./reattach";
 import { AgentIcon, auraFor } from "./icons";
 
@@ -49,8 +51,15 @@ function AgentNodeImpl({ id, data }: NodeProps) {
   // A few facts, not the whole store, because it is a glance and not the memory panel.
   const [recall, setRecall] = useState<Memory[]>([]);
   const [recallShown, setRecallShown] = useState(true);
+  // A dev-server node runs the project's own dev command instead of an agent CLI. Same PTY, same
+  // terminal, same lifecycle; what differs is where the command comes from and that its output is
+  // watched for the preview address.
+  const isDev = nodeData.kind === "dev";
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
   useEffect(() => {
+    // A dev server has no conversation to remember; the recall strip on it would be noise.
+    if (isDev) return;
     let dropped = false;
     void memoryList(3).then((facts) => {
       if (!dropped) setRecall(facts);
@@ -58,7 +67,7 @@ function AgentNodeImpl({ id, data }: NodeProps) {
     return () => {
       dropped = true;
     };
-  }, []);
+  }, [isDev]);
 
   // One terminal per node, wired to the backend PTY. Runs once per mount; on a hot reload it
   // reattaches to the still-running PTY instead of restarting it.
@@ -85,6 +94,21 @@ function AgentNodeImpl({ id, data }: NodeProps) {
     let ready = false; // until the snapshot is applied, buffer live chunks
     let disposed = false;
     const buffered: OutputEvent[] = [];
+
+    // The preview address is fished out of the dev server's own banner. A rolling tail, because
+    // chunk boundaries land anywhere, including mid-url.
+    let urlTail = "";
+    let urlFound = false;
+    const decoder = new TextDecoder();
+    const scanForUrl = (bytes: Uint8Array) => {
+      if (!isDev || urlFound) return;
+      urlTail = appendTail(urlTail, decoder.decode(bytes, { stream: true }));
+      const url = findLocalUrl(urlTail);
+      if (url !== null) {
+        urlFound = true;
+        setPreviewUrl(url);
+      }
+    };
 
     let running = false;
     let exited = false;
@@ -117,7 +141,9 @@ function AgentNodeImpl({ id, data }: NodeProps) {
 
     const write = (e: OutputEvent) => {
       if (pastSnapshot(e.seq, lastSeq)) {
-        term.write(new Uint8Array(e.data));
+        const bytes = new Uint8Array(e.data);
+        term.write(bytes);
+        scanForUrl(bytes);
         lastSeq = e.seq;
       }
     };
@@ -145,36 +171,67 @@ function AgentNodeImpl({ id, data }: NodeProps) {
       const snap = await terminalSnapshot(id);
       if (disposed) return;
       if (snap === null) {
-        // Fresh node, or the app was fully restarted: launch this node's CLI now. Resolve the
-        // binary from the agent registry by kind so each node runs its own agent, not codex.
-        const agent = (await agentsByKind()).get(nodeData.kind);
-        if (disposed) return;
-        if (!agent || !agent.available) {
-          term.write(
-            `\r\n\x1b[31m${nodeData.kind} isn't installed\x1b[0m or not on your PATH.\r\n`,
-          );
-          term.write(
-            "Run `just doctor` to see what's missing, then reopen the node.\r\n",
-          );
-        } else {
-          try {
-            await terminalStart(
-              id,
-              nodeData.kind,
-              agent.cmd,
-              agent.args,
-              nodeData.cwd,
-              term.rows,
-              term.cols,
-            );
-          } catch (err) {
+        // Fresh node, or the app was fully restarted: launch this node's command now. An agent
+        // node resolves its CLI from the registry by kind; a dev node asks the engine what this
+        // project's dev command is.
+        if (isDev) {
+          const cmd = await devCommand();
+          if (disposed) return;
+          if (cmd === null || cmd.length === 0) {
             term.write(
-              `\r\n\x1b[31m${agent.name} didn't start:\x1b[0m ${err}\r\n`,
+              "\r\n\x1b[31mThis project does not declare a dev command\x1b[0m in package.json, a justfile, or a Makefile.\r\n",
             );
+          } else {
+            try {
+              await terminalStart(
+                id,
+                nodeData.kind,
+                cmd[0]!,
+                cmd.slice(1),
+                nodeData.cwd,
+                term.rows,
+                term.cols,
+              );
+            } catch (err) {
+              term.write(
+                `\r\n\x1b[31mThe dev server didn't start:\x1b[0m ${err}\r\n`,
+              );
+            }
+          }
+        } else {
+          const agent = (await agentsByKind()).get(nodeData.kind);
+          if (disposed) return;
+          if (!agent || !agent.available) {
+            term.write(
+              `\r\n\x1b[31m${nodeData.kind} isn't installed\x1b[0m or not on your PATH.\r\n`,
+            );
+            term.write(
+              "Run `just doctor` to see what's missing, then reopen the node.\r\n",
+            );
+          } else {
+            try {
+              await terminalStart(
+                id,
+                nodeData.kind,
+                agent.cmd,
+                agent.args,
+                nodeData.cwd,
+                term.rows,
+                term.cols,
+              );
+            } catch (err) {
+              term.write(
+                `\r\n\x1b[31m${agent.name} didn't start:\x1b[0m ${err}\r\n`,
+              );
+            }
           }
         }
       } else {
-        term.write(new Uint8Array(snap.data));
+        const bytes = new Uint8Array(snap.data);
+        term.write(bytes);
+        // The reattach replay holds the banner that was printed before the reload, so the URL is
+        // in there, not in any chunk still to come.
+        scanForUrl(bytes);
         lastSeq = snap.lastSeq;
       }
       for (const e of buffered) write(e); // drain what arrived during the await
@@ -246,6 +303,16 @@ function AgentNodeImpl({ id, data }: NodeProps) {
             command center
           </span>
         )}
+        {previewUrl !== null && (
+          // The server's own address, read from its banner. Where the page actually is beats a
+          // vague "running": this is the line the user would otherwise squint at the terminal for.
+          <span
+            className="identra-node__preview"
+            title="The dev server is serving here"
+          >
+            {previewUrl}
+          </span>
+        )}
         {nodeData.onToggleLock !== undefined && (
           // Always visible once locked, hover-only when open, the same as the close button. A lock
           // that hides itself is a setting the user cannot tell is on, and the whole value of this
@@ -271,11 +338,10 @@ function AgentNodeImpl({ id, data }: NodeProps) {
             // Naming what it is, because "delete this node" does not tell you that a conversation
             // goes with it. This is the only way to remove one now that the key does not.
             const name = nodeData.title || nodeData.kind;
-            if (
-              window.confirm(
-                `Close ${name}?\n\nThe agent stops and its conversation is forgotten.`,
-              )
-            ) {
+            const cost = isDev
+              ? "The dev server stops."
+              : "The agent stops and its conversation is forgotten.";
+            if (window.confirm(`Close ${name}?\n\n${cost}`)) {
               void deleteElements({ nodes: [{ id }] });
             }
           }}

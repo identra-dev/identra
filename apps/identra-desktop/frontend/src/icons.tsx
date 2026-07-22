@@ -67,6 +67,9 @@ const MARKS: Record<string, Mark> = {
   aider: { tile: "#17b217", ink: "#ffffff", letter: "A" },
   goose: { tile: "#b5835a", ink: "#ffffff", letter: "G" },
   browser: { tile: "#3584e4", ink: "#ffffff", path: GLOBE },
+  // The dev server node: Identra's own surface, running the project's own command. The prompt
+  // glyph says "this is a process", and green is the terminal-green everyone reads as running.
+  dev: { tile: "#26a269", ink: "#ffffff", letter: ">", aura: "#26a269" },
 };
 
 // A saved canvas can name an agent this build has no mark for. Paint it neutral with its initial

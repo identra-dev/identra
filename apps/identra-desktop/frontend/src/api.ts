@@ -189,6 +189,10 @@ export const memoryList = (limit?: number) =>
 export const memorySearch = (query: string, limit?: number) =>
   invoke<Memory[]>("memory_search", { query, limit: limit ?? null });
 
+// The command that starts this workspace's dev server, split into argv, or null when the project
+// does not declare one. Read per workspace: the Run control exists exactly when this answers.
+export const devCommand = () => invoke<string[] | null>("dev_command");
+
 // What is true of this machine, as opposed to of one workspace. Mirrors identra-core settings.rs.
 export type Settings = {
   // Recall by meaning: on fetches a local model once (about 130MB), off matches by words and
