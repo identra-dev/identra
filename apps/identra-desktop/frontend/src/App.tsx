@@ -22,6 +22,7 @@ import "@xterm/xterm/css/xterm.css";
 import AgentNode, { type AgentNodeData } from "./AgentNode";
 import BrowserNode from "./BrowserNode";
 import FileNode from "./FileNode";
+import FilesPanel from "./FilesPanel";
 import NoteNode from "./NoteNode";
 import Onboarding from "./Onboarding";
 import WorkspacePicker from "./WorkspacePicker";
@@ -119,6 +120,7 @@ export default function App() {
   const [edges, setEdges] = useState<FEdge[]>([]);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [filesOpen, setFilesOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   // The dev command this workspace declares, or null. Existence is what the Run button keys on.
   const [devCmd, setDevCmd] = useState<string[] | null>(null);
@@ -999,10 +1001,25 @@ export default function App() {
         <button
           className="identra-topbar__btn"
           data-on={panelOpen}
-          onClick={() => setPanelOpen((v) => !v)}
+          onClick={() => {
+            // One slide-over at a time: they share the same edge of the window.
+            setFilesOpen(false);
+            setPanelOpen((v) => !v);
+          }}
           title="What your agents are working on"
         >
           Work
+        </button>
+        <button
+          className="identra-topbar__btn"
+          data-on={filesOpen}
+          onClick={() => {
+            setPanelOpen(false);
+            setFilesOpen((v) => !v);
+          }}
+          title="Browse and search this workspace's files"
+        >
+          Files
         </button>
         {/* One dev server per workspace: the button is the way to start it, so the button goes
             while one is on the board. Stopping is closing the node, like everything else. */}
@@ -1064,6 +1081,16 @@ export default function App() {
       </div>
 
       {panelOpen && <WorkPanel onClose={() => setPanelOpen(false)} />}
+      {filesOpen && (
+        <FilesPanel
+          onClose={() => setFilesOpen(false)}
+          onOpenFile={(rel, name) => {
+            // The panel speaks workspace-relative; the viewer node stores the absolute path,
+            // same as every other door to it, so a saved canvas needs no second path shape.
+            addNode("file", name, `${workspace.path}/${rel}`);
+          }}
+        />
+      )}
       {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
       {focused !== null &&
         (() => {

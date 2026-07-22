@@ -193,6 +193,30 @@ export const memorySearch = (query: string, limit?: number) =>
 // does not declare one. Read per workspace: the Run control exists exactly when this answers.
 export const devCommand = () => invoke<string[] | null>("dev_command");
 
+// One row of the Files panel, workspace-relative, mirroring identra-core files.rs.
+export type FileEntry = {
+  name: string;
+  path: string;
+  dir: boolean;
+  size: number;
+};
+
+// A search hit: a name match carries no line, a content match carries the line and a snippet.
+export type FileHit = {
+  path: string;
+  line: number | null;
+  snippet: string | null;
+};
+
+export const filesList = (rel: string) =>
+  invoke<FileEntry[]>("files_list", { rel });
+
+export const filesSearch = (query: string) =>
+  invoke<FileHit[]>("files_search", { query });
+
+export const fileReveal = (rel: string) =>
+  invoke<void>("file_reveal", { rel });
+
 // What the file viewer renders, mirroring identra-core fileview.rs. Image bytes arrive as a
 // plain array and become a blob URL on this side, which keeps base64 out of both.
 export type FileView =

@@ -12,10 +12,12 @@
 //! - [`settings`]: what is true of this machine, as one small file.
 //! - [`devserver`]: which command runs a project's dev server.
 //! - [`fileview`]: read a workspace file for the viewer node, and only a workspace file.
+//! - [`files`]: list and search the workspace for the Files panel.
 
 pub mod agents;
 pub mod canvas;
 pub mod devserver;
+pub mod files;
 pub mod fileview;
 pub mod session;
 pub mod settings;

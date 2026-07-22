@@ -344,6 +344,41 @@ fn file_read(
     identra_core::fileview::read(&state.dir(), Path::new(&path)).map_err(|e| e.to_string())
 }
 
+/// One directory of the workspace, for the Files panel. `rel` is workspace-relative; the engine
+/// refuses anything that resolves outside.
+#[tauri::command]
+fn files_list(
+    state: State<AppState>,
+    rel: String,
+) -> Result<Vec<identra_core::files::Entry>, String> {
+    identra_core::files::list(&state.dir(), &rel).map_err(|e| e.to_string())
+}
+
+/// Names and text content under the workspace, case-insensitive, capped in the engine.
+#[tauri::command]
+fn files_search(state: State<AppState>, query: String) -> Vec<identra_core::files::Hit> {
+    identra_core::files::search(&state.dir(), &query, 50)
+}
+
+/// Show a workspace file in the OS file manager. The path is checked before anything is spawned,
+/// and what opens is the containing folder: revealing is about where the file lives.
+#[tauri::command]
+fn file_reveal(state: State<AppState>, rel: String) -> Result<(), String> {
+    let full = identra_core::files::resolve(&state.dir(), &rel).map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    let spawned = std::process::Command::new("open")
+        .arg("-R")
+        .arg(&full)
+        .spawn();
+    #[cfg(not(target_os = "macos"))]
+    let spawned = std::process::Command::new("xdg-open")
+        .arg(full.parent().unwrap_or(&full))
+        .spawn();
+    spawned
+        .map(|_| ())
+        .map_err(|e| format!("could not open the file manager: {e}"))
+}
+
 /// What is true of this machine, for the settings panel to show.
 #[tauri::command]
 fn settings_get() -> identra_core::settings::Settings {
@@ -660,6 +695,9 @@ pub fn run() {
             memory_search,
             dev_command,
             file_read,
+            file_reveal,
+            files_list,
+            files_search,
             settings_get,
             settings_set,
             wallpapers_list,

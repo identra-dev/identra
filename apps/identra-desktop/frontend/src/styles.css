@@ -1476,3 +1476,88 @@ body {
   font-size: 12px;
   line-height: 1.5;
 }
+
+/* Rows in the Files panel. The open button is the row; reveal is the small side action. */
+.identra-fileent {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.identra-fileent__open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 8px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.identra-fileent__open:hover {
+  background: var(--header);
+}
+.identra-fileent__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.identra-fileent__line {
+  color: #9a9a9a;
+}
+.identra-fileent__snippet {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: Ubuntu Mono, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: #9a9a9a;
+}
+.identra-fileent__reveal {
+  flex: none;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: #6b6b6b;
+  font: inherit;
+  font-size: 10px;
+  padding: 3px 8px;
+  cursor: pointer;
+  opacity: 0;
+}
+.identra-fileent:hover .identra-fileent__reveal {
+  opacity: 1;
+}
+.identra-fileent__reveal:hover {
+  color: var(--text);
+  border-color: var(--panel-edge);
+}
+/* The way back up: workspace, then each folder of the current path. The last crumb is where you
+   are, so it is not a button that goes anywhere. */
+.identra-files__crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 0 2px 6px;
+}
+.identra-files__crumb {
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  color: #9a9a9a;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.identra-files__crumb:hover:not(:disabled) {
+  color: var(--text);
+}
+.identra-files__crumb:disabled {
+  color: var(--text);
+  cursor: default;
+}
