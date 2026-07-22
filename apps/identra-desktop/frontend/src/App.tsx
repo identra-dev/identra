@@ -27,6 +27,7 @@ import SettingsPanel from "./SettingsPanel";
 import WorkPanel from "./WorkPanel";
 import WorkspaceMenu from "./WorkspaceMenu";
 import CommandBar, { type DispatchState } from "./CommandBar";
+import FocusView from "./FocusView";
 import WallpaperPicker from "./WallpaperPicker";
 import { AgentIcon } from "./icons";
 import { tidyPositions } from "./tidy";
@@ -111,6 +112,8 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   // The dev command this workspace declares, or null. Existence is what the Run button keys on.
   const [devCmd, setDevCmd] = useState<string[] | null>(null);
+  // The node open at full window size, or null. One at a time by construction.
+  const [focused, setFocused] = useState<string | null>(null);
   // Set when a write to disk fails. The board is on screen and not saved, and the only wrong move
   // is to say nothing.
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -458,6 +461,10 @@ export default function App() {
       // Closing the node that held the seat vacates it. The command bar then has nothing to talk
       // to and says so, which is better than dispatching into a node that is gone.
       if (deleted.some((n) => n.id === seatRef.current)) assignSeat(null);
+      // A focus view over a node that just went is a window onto nothing; back to the canvas.
+      setFocused((cur) =>
+        cur !== null && deleted.some((n) => n.id === cur) ? null : cur,
+      );
     },
     [assignSeat],
   );
@@ -794,6 +801,7 @@ export default function App() {
           ...n.data,
           onToggleLock: toggleLock,
           onOpenPreview: openPreview,
+          onFocus: setFocused,
         };
         return n.id === seat
           ? { ...n, data: { ...data, seat: true }, className: "is-seat" }
@@ -987,6 +995,19 @@ export default function App() {
 
       {panelOpen && <WorkPanel onClose={() => setPanelOpen(false)} />}
       {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
+      {focused !== null &&
+        (() => {
+          // Resolved at render rather than stored, so a renamed node's focus bar follows it.
+          const node = nodes.find((n) => n.id === focused);
+          return node === undefined ? null : (
+            <FocusView
+              nodeId={focused}
+              title={node.data.title}
+              kind={node.data.kind}
+              onClose={() => setFocused(null)}
+            />
+          );
+        })()}
 
       {/* Above the dock, because the dock is how you place one agent yourself and this is how you
           ask for the whole job to be done. Hidden until an agent exists to run it: on a machine

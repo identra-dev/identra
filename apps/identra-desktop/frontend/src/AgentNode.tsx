@@ -35,6 +35,8 @@ export type AgentNodeData = {
   // Stamped on the same way. A dev-server node calls it when the user clicks the address badge,
   // and App answers by standing a browser node up next to it.
   onOpenPreview?: (id: string, url: string) => void;
+  // Stamped on the same way. Opens this node's conversation at full window size.
+  onFocus?: (id: string) => void;
 };
 
 function AgentNodeImpl({ id, data }: NodeProps) {
@@ -316,6 +318,17 @@ function AgentNodeImpl({ id, data }: NodeProps) {
             onClick={() => nodeData.onOpenPreview?.(id, previewUrl)}
           >
             {previewUrl}
+          </button>
+        )}
+        {nodeData.onFocus !== undefined && (
+          // Same hover-reveal as lock and close. Reading a conversation in a tile is squinting;
+          // this is the door to reading it at full size, same PTY, nothing moved.
+          <button
+            className="identra-node__expand nodrag"
+            title="Open this conversation at full size"
+            onClick={() => nodeData.onFocus?.(id)}
+          >
+            expand
           </button>
         )}
         {nodeData.onToggleLock !== undefined && (

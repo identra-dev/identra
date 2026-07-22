@@ -1056,7 +1056,8 @@ body {
 /* Sits to the left of close and behaves the same way: out of sight until you are on the node, so a
    row of nodes is terminals rather than chrome. The exception is a node that is actually locked,
    which stays visible, because a protection you cannot see is one you cannot trust. */
-.identra-node__lock {
+.identra-node__lock,
+.identra-node__expand {
   margin-left: auto;
   background: transparent;
   border: 1px solid transparent;
@@ -1070,10 +1071,17 @@ body {
   opacity: 0;
   transition: opacity 0.12s ease-out;
 }
-.identra-node:hover .identra-node__lock {
+/* When both render, expand carries the push and lock sits next to it. Two auto margins would
+   otherwise split the free space and open a gap between them. */
+.identra-node__expand ~ .identra-node__lock {
+  margin-left: 4px;
+}
+.identra-node:hover .identra-node__lock,
+.identra-node:hover .identra-node__expand {
   opacity: 1;
 }
-.identra-node__lock:hover {
+.identra-node__lock:hover,
+.identra-node__expand:hover {
   color: var(--text);
   border-color: var(--panel-edge);
 }
@@ -1388,4 +1396,54 @@ body {
 .identra-picker__clone-go:disabled {
   opacity: 0.6;
   cursor: default;
+}
+
+/* Focus mode: one conversation, the whole window. Above every popover, because it is the thing
+   being read; below nothing. The terminal keeps its Ubuntu aubergine, so full size still reads
+   as the same node, just bigger. */
+.identra-focus {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+.identra-focus__bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--header);
+  border-bottom: 1px solid var(--panel-edge);
+}
+.identra-focus__title {
+  font-size: 13px;
+  font-weight: 600;
+}
+.identra-focus__hint {
+  margin-left: auto;
+  color: #6b6b6b;
+  font-size: 11px;
+}
+.identra-focus__close {
+  background: transparent;
+  border: none;
+  color: #9a9a9a;
+  font-size: 18px;
+  line-height: 1;
+  padding: 0 4px;
+  cursor: pointer;
+}
+.identra-focus__close:hover {
+  color: var(--text);
+}
+.identra-focus__term {
+  flex: 1;
+  min-height: 0;
+  padding: 8px 10px;
+  background: #300a24;
+}
+.identra-focus__term .xterm {
+  height: 100%;
 }
