@@ -85,6 +85,35 @@ fn valid_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
 }
 
+/// The id resume wants, read off the transcript's filename.
+///
+/// claude names transcripts by the session uuid alone, so the stem is the id. codex names them
+/// `rollout-<timestamp>-<uuid>` but its resume takes "Session id (UUID) or session name", and the
+/// whole stem is neither: feeding it gets "No saved session found" at the next launch, a dead CLI
+/// in the node, and an error the user did not cause. That is not hypothetical, it is exactly what
+/// happened on 2026-07-22. So the uuid is cut out of the tail here, in the one place both detect
+/// and load go through, and a codex filename that does not end in a uuid yields nothing, because
+/// a guessed id resumes the wrong conversation.
+fn session_id_for(agent: &str, file: &Path) -> Option<String> {
+    let stem = file.file_stem()?.to_string_lossy();
+    match agent {
+        "codex" => {
+            let tail = stem.len().checked_sub(36).and_then(|at| stem.get(at..))?;
+            looks_like_uuid(tail).then(|| tail.to_string())
+        }
+        _ => Some(stem.into_owned()),
+    }
+}
+
+/// The 8-4-4-4-12 shape and nothing else. This string ends up on a command line.
+fn looks_like_uuid(s: &str) -> bool {
+    s.len() == 36
+        && s.char_indices().all(|(i, c)| match i {
+            8 | 13 | 18 | 23 => c == '-',
+            _ => c.is_ascii_hexdigit(),
+        })
+}
+
 /// The agent this transcript belongs to, judged by where it lives.
 ///
 /// Each CLI writes under its own directory, so the path says whose it is. I check the directory
@@ -270,7 +299,9 @@ pub fn detect(pty_pid: u32) -> Option<Session> {
         // Trust the path over the process: a wrapper named `claude` that has a codex transcript
         // open is not a thing I want to record as claude.
         let agent = agent_for_transcript(&file).unwrap_or(row.agent);
-        let id = file.file_stem()?.to_string_lossy().into_owned();
+        let Some(id) = session_id_for(agent, &file) else {
+            continue;
+        };
         if !valid_id(&id) {
             continue;
         }
@@ -320,7 +351,12 @@ pub fn save(project_dir: &Path, node_id: &str, session: &Session) -> std::io::Re
 /// launch for a reason the user cannot see. Better to start fresh and say nothing.
 pub fn load(project_dir: &Path, node_id: &str) -> Option<Session> {
     let text = std::fs::read_to_string(session_path(project_dir, node_id)).ok()?;
-    let session: Session = serde_json::from_str(&text).ok()?;
+    let mut session: Session = serde_json::from_str(&text).ok()?;
+    // Re-derived rather than trusted. An earlier Identra stored codex's whole filename stem as
+    // the id, which its resume refuses, and those files are sitting in real workspaces now. The
+    // filename is still the truth, so reading the id off it heals every one of them on the next
+    // open instead of failing them forever.
+    session.id = session_id_for(&session.agent, &session.file)?;
     session.file.is_file().then_some(session)
 }
 
@@ -413,7 +449,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
-        let transcript = dir.join("live.jsonl");
+        // The filename is the id for claude, and load re-derives one from the other, so the
+        // fixture keeps them consistent the way a real transcript is.
+        let transcript = dir.join("abc-123.jsonl");
         std::fs::write(&transcript, "{}").unwrap();
         let session = Session {
             agent: "claude".into(),
@@ -440,6 +478,62 @@ mod tests {
             None,
             "a deliberate restart starts fresh"
         );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// codex names its transcript `rollout-<timestamp>-<uuid>` but `codex resume` takes a uuid,
+    /// and handing it the whole stem gets "No saved session found" and a dead node. A session
+    /// file written by a build that stored the wrong shape has to heal on load, because those
+    /// files are in real workspaces.
+    #[test]
+    fn codex_resume_gets_the_uuid_not_the_rollout_filename() {
+        let dir = std::env::temp_dir().join(format!("identra-sess-cx-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let transcript =
+            dir.join("rollout-2026-07-22T11-35-40-019f886e-083b-7ac0-a916-4461e6c04e4f.jsonl");
+        std::fs::write(&transcript, "{}").unwrap();
+
+        // Saved the way the buggy build saved it: the whole stem as the id.
+        save(
+            &dir,
+            "n1",
+            &Session {
+                agent: "codex".into(),
+                id: "rollout-2026-07-22T11-35-40-019f886e-083b-7ac0-a916-4461e6c04e4f".into(),
+                file: transcript.clone(),
+            },
+        )
+        .unwrap();
+
+        let healed = load(&dir, "n1").expect("the transcript exists, so the session loads");
+        assert_eq!(
+            healed.id, "019f886e-083b-7ac0-a916-4461e6c04e4f",
+            "the id is the uuid codex resume actually accepts"
+        );
+        assert_eq!(
+            resume_args(&healed).unwrap(),
+            vec!["resume".to_string(), healed.id.clone()],
+            "and it is what lands on the command line"
+        );
+
+        // A codex transcript whose name does not end in a uuid yields no session at all. A
+        // guessed id resumes the wrong conversation, which is worse than starting fresh.
+        let odd = dir.join("rollout-strange-name.jsonl");
+        std::fs::write(&odd, "{}").unwrap();
+        save(
+            &dir,
+            "n2",
+            &Session {
+                agent: "codex".into(),
+                id: "rollout-strange-name".into(),
+                file: odd,
+            },
+        )
+        .unwrap();
+        assert_eq!(load(&dir, "n2"), None);
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
