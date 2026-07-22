@@ -326,6 +326,20 @@ fn memory_search(
         .map_err(|e| e.to_string())
 }
 
+/// What is true of this machine, for the settings panel to show.
+#[tauri::command]
+fn settings_get() -> identra_core::settings::Settings {
+    identra_core::settings::load()
+}
+
+/// Write the settings. The panel notes that the embeddings choice lands at the next launch: the
+/// engine reads it once per process, at the first memory call, so a mid-session toggle is a
+/// promise about next time rather than a lie about now.
+#[tauri::command]
+fn settings_set(settings: identra_core::settings::Settings) -> Result<(), String> {
+    identra_core::settings::save(&settings).map_err(|e| e.to_string())
+}
+
 /// The wallpaper library's images, as absolute paths. The frontend turns each into an asset URL;
 /// the built-in backgrounds never appear here because they are drawn from CSS, not from files.
 #[tauri::command]
@@ -613,6 +627,8 @@ pub fn run() {
             board_list,
             memory_list,
             memory_search,
+            settings_get,
+            settings_set,
             wallpapers_list,
             wallpaper_add,
             wallpaper_remove,

@@ -88,12 +88,17 @@ fn shared_embedder() -> Option<std::sync::Arc<dyn memory::Embedder>> {
     static MODEL: OnceLock<Option<std::sync::Arc<memory::LocalEmbedder>>> = OnceLock::new();
     MODEL
         .get_or_init(|| {
-            // The one thing in Identra that reaches the network, so it gets a way to say no. Set
-            // IDENTRA_EMBEDDINGS=off and recall matches on words and nothing is ever fetched. Our
-            // own tests set it, since a suite that pulls 130MB from a model host fails for reasons
-            // that have nothing to do with the code, and a workspace build turns this feature on for
-            // every crate whether it wanted it or not.
+            // The one thing in Identra that reaches the network, so it gets two ways to say no.
+            // The env is for tests and scripts: a suite that pulls 130MB from a model host fails
+            // for reasons that have nothing to do with the code, and a workspace build turns this
+            // feature on for every crate whether it wanted it or not. The settings file is the
+            // user's own switch, written by the settings panel. Read here, at the same gate,
+            // because the OnceLock means the answer is fixed for the life of the process anyway
+            // and this is the one place it is asked.
             if std::env::var("IDENTRA_EMBEDDINGS").is_ok_and(|v| v == "off") {
+                return None;
+            }
+            if !identra_core::settings::load().embeddings {
                 return None;
             }
             match memory::LocalEmbedder::new() {

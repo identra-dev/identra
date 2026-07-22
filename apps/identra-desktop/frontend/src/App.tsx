@@ -23,6 +23,7 @@ import BrowserNode from "./BrowserNode";
 import NoteNode from "./NoteNode";
 import Onboarding from "./Onboarding";
 import WorkspacePicker from "./WorkspacePicker";
+import SettingsPanel from "./SettingsPanel";
 import WorkPanel from "./WorkPanel";
 import WorkspaceMenu from "./WorkspaceMenu";
 import CommandBar, { type DispatchState } from "./CommandBar";
@@ -106,6 +107,7 @@ export default function App() {
   const [edges, setEdges] = useState<FEdge[]>([]);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   // Set when a write to disk fails. The board is on screen and not saved, and the only wrong move
   // is to say nothing.
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -929,9 +931,18 @@ export default function App() {
         >
           Import
         </button>
+        <button
+          className="identra-topbar__btn"
+          data-on={settingsOpen}
+          onClick={() => setSettingsOpen((v) => !v)}
+          title="Settings for this machine"
+        >
+          Settings
+        </button>
       </div>
 
       {panelOpen && <WorkPanel onClose={() => setPanelOpen(false)} />}
+      {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
 
       {/* Above the dock, because the dock is how you place one agent yourself and this is how you
           ask for the whole job to be done. Hidden until an agent exists to run it: on a machine

@@ -189,6 +189,19 @@ export const memoryList = (limit?: number) =>
 export const memorySearch = (query: string, limit?: number) =>
   invoke<Memory[]>("memory_search", { query, limit: limit ?? null });
 
+// What is true of this machine, as opposed to of one workspace. Mirrors identra-core settings.rs.
+export type Settings = {
+  // Recall by meaning: on fetches a local model once (about 130MB), off matches by words and
+  // never touches the network. Read by the engine once per process, so a change lands at the
+  // next launch.
+  embeddings: boolean;
+};
+
+export const settingsGet = () => invoke<Settings>("settings_get");
+
+export const settingsSet = (settings: Settings) =>
+  invoke<void>("settings_set", { settings });
+
 // The shared wallpaper library: images added once, usable from any workspace. Listing returns
 // absolute paths; the canvas layer turns each into an asset URL when it draws.
 export const wallpapersList = () => invoke<string[]>("wallpapers_list");
