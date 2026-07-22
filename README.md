@@ -43,6 +43,10 @@ There is a `.deb` and an `.rpm` there too if you would rather install it properl
 
 **macOS**
 
+The `.dmg` is built for Apple Silicon. Intel Macs are not supported yet: the local embedding
+model's runtime ships no x86 macOS build, and I would rather say that plainly than ship a dmg
+that half works.
+
 Open the `.dmg` and drag Identra to Applications. It is not notarized yet, so the first launch
 needs one of these, or macOS will tell you it cannot check the app for malicious software:
 
@@ -79,16 +83,30 @@ agent so nobody starts from zero.
 
 - Drop an agent node on an infinite canvas. It spawns a real `codex` process in a terminal
   you can type into. No shell wrapper, no fake sandbox, the actual CLI on your machine.
-- The canvas saves itself. Close the app, open it next week, your nodes and layout come back
-  exactly where you left them.
+- Type what you want done into the command bar and an orchestrator seat breaks the work up,
+  spawns the helper nodes it needs, wires them, and puts the pieces on a shared task board you
+  can watch. Wired agents message each other, split work, and hand results back over a local
+  bus. An edge between two nodes is the permission: no wire, no shared context.
+- A workspace is a folder, usually your repo. Open one you have, make an empty one, or paste a
+  git URL and Identra clones it. Each workspace keeps its own canvas, board, memory, and
+  wallpaper, and the picker shows each board at a glance.
+- Press Run and Identra starts your project's own dev command in a node, reads the local URL
+  off the server's banner, and one click opens the page in a browser node beside it.
+- Reading a conversation in a tile is squinting, so every node expands to the full window over
+  the same terminal. Drop a file on the canvas to view it, browse and search the workspace from
+  the Files panel, and agents can open a file node themselves to show you what they made.
+- The canvas saves itself. Close the app, open it next week, your nodes, layout, and each
+  agent's own conversation come back exactly where you left them.
 - A memory layer watches your sessions and pulls out the durable facts: decisions, rejected
   directions, conventions. When you open a fresh agent in a project Identra already knows, it
   shows what it remembers before the agent's first prompt.
 - Everything runs on your machine. Your agent API keys stay in your own CLI config. Identra
-  never stores them and never phones home.
+  never stores them and never phones home. Installed builds update themselves from Releases,
+  and installing an update is always your click, never automatic.
 
 The look is Ubuntu/Yaru, because I stare at this thing all day and I wanted it to feel like
-part of my desktop, not a browser tab pretending to be an app.
+part of my desktop, not a browser tab pretending to be an app. The wallpaper is yours to set,
+per workspace.
 
 ## Requirements
 
@@ -195,11 +213,14 @@ Identra uses a `justfile` for everything. Run `just` to list them.
 ## Status
 
 Early, and honest about it. What works today: agent nodes each running their own real CLI in a
-persistent canvas, a dock that reflects which agents you have installed and signed into, and
-connection edges that let two wired agents share context through the bus (draw the wire, then
-launch, since a CLI reads its MCP servers at startup). Memory is on the recall path: agents read
-and write it through the bus, and the work panel shows you every fact the project holds, because
-memory only agents can read is memory you cannot check or correct.
+persistent canvas, the command bar driving an orchestrator seat that spawns and wires helpers,
+a shared task board, workspaces with clone and per-board wallpaper, the dev server Run button
+with a live browser preview, full-window focus on any node, file viewing on the canvas, the
+Files panel with search, and auto update. Connection edges let two wired agents share context
+through the bus (draw the wire, then launch, since a CLI reads its MCP servers at startup).
+Memory is on the recall path: agents read and write it through the bus, and the work panel
+shows you every fact the project holds, because memory only agents can read is memory you
+cannot check or correct.
 
 Recall works on meaning, not on words. Ask "how do we handle auth" and you get the decision that
 was written down as "the API issues JWT bearer tokens", which share no word at all. That runs on a
