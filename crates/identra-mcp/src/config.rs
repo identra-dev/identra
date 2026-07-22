@@ -334,6 +334,9 @@ You are not limited to who is already here. If the work genuinely splits, add he
   before the other one launches where you can.
 - `add_note(text)` leaves a note on the canvas for your user. Use it for something a human needs to
   see or decide, not for talking to an agent.
+- `show_file(path, title?)` opens a workspace file in a read-only viewer node wired to you. Use it
+  to hand your user an artifact: a report you wrote, an image, a summary. It beats making them
+  scroll your terminal for the thing that matters.
 
 Put the work on the board before you bring someone on. A helper that arrives to an empty board has
 nothing to claim and will just sit there. Add the tasks, then add the agent, then tell it to claim.

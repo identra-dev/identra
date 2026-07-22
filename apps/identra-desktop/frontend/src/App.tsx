@@ -802,6 +802,39 @@ export default function App() {
             return { ok: false, error: "a note needs some text" };
           return { ok: true, id: addNode("note", text) };
         }
+        case "show_file": {
+          const path = typeof p.path === "string" ? p.path : "";
+          if (!path) return { ok: false, error: "a file node needs a path" };
+          const title =
+            typeof p.title === "string" && p.title
+              ? p.title
+              : (path.split("/").pop() ?? "file");
+          // Same lock rule as every other wire an agent asks for, checked before the node
+          // exists so a refusal leaves nothing behind.
+          if (
+            typeof p.connectTo === "string" &&
+            p.connectTo &&
+            locked(p.connectTo)
+          ) {
+            return { ok: false, error: lockedReason(p.connectTo) };
+          }
+          // Artifacts fan right of the agent that made them; helpers fan down. The two reading
+          // directions are what keep a busy board legible.
+          const parent = nodesRef.current.find((n) => n.id === p.connectTo);
+          const at = parent
+            ? {
+                x:
+                  parent.position.x +
+                  (Number(parent.style?.width) || DEFAULT_W) +
+                  60,
+                y: parent.position.y,
+              }
+            : undefined;
+          const id = addNode("file", title, path, at);
+          if (typeof p.connectTo === "string" && p.connectTo)
+            wire(p.connectTo, id);
+          return { ok: true, id };
+        }
         default:
           return {
             ok: false,

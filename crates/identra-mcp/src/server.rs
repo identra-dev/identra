@@ -493,6 +493,18 @@ fn tool_specs() -> Value {
             }
         },
         {
+            "name": "show_file",
+            "description": "Open a file in a read-only viewer node on the canvas, wired to you, so your user can look at what you made without scrolling your terminal. Use it to hand over an artifact: a report you wrote, an image, a summary. Only files inside the workspace can be shown.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "The file to show, absolute or relative to the workspace."},
+                    "title": {"type": "string", "description": "What the node is called. Defaults to the file name."}
+                },
+                "required": ["path"]
+            }
+        },
+        {
             "name": "get_node_status",
             "description": "Check whether a node is working, waiting, or gone. Read from its output: an agent that is thinking prints, an agent that is done goes quiet. Quiet can also mean it is stuck waiting on its human, so do not read it as success.",
             "inputSchema": {
@@ -766,6 +778,43 @@ async fn call_tool(bus: &Bus, caller: &str, params: Option<&Value>) -> Value {
             }
             match bus.canvas_command("add_note", json!({"text": text})).await {
                 Ok(v) => canvas_reply(&v, |id| format!("left note {id} on the canvas")),
+                Err(e) => err_text(&e),
+            }
+        }
+        "show_file" => {
+            let path = arg_str("path");
+            if path.trim().is_empty() {
+                return err_text("say which file to show");
+            }
+            // Relative resolves against the workspace, because that is where the caller works.
+            let full = if std::path::Path::new(&path).is_absolute() {
+                std::path::PathBuf::from(&path)
+            } else {
+                dir.join(&path)
+            };
+            // Checked here, before anything lands on the canvas, through the same reader the
+            // viewer node uses: one authority for what is showable. Refusing now gives the agent
+            // a reason it can act on instead of a broken node appearing on the user's board.
+            if let Err(e) = identra_core::fileview::read(&dir, &full) {
+                return err_text(&format!("that file cannot be shown: {e}"));
+            }
+            let title = match args.get("title").and_then(Value::as_str) {
+                Some(t) if !t.trim().is_empty() => t.to_string(),
+                _ => full
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path.clone()),
+            };
+            let params = json!({
+                "path": full.display().to_string(),
+                "title": title,
+                // Wired to whoever showed it, so the artifact reads as that agent's work.
+                "connectTo": caller,
+            });
+            match bus.canvas_command("show_file", params).await {
+                Ok(v) => canvas_reply(&v, |id| {
+                    format!("opened {id} on the canvas, showing the file to your user")
+                }),
                 Err(e) => err_text(&e),
             }
         }
@@ -1294,6 +1343,7 @@ mod tests {
                 "add_terminal",
                 "connect_nodes",
                 "add_note",
+                "show_file",
                 "get_node_status",
                 "wait_for_nodes",
                 "land_work",
@@ -1733,6 +1783,49 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("canvas is full"));
+
+        // Showing a file: a relative path resolves against the workspace, the request carries the
+        // absolute path plus the caller to wire to, and a path outside the workspace never
+        // reaches the canvas at all. The refusal happens here, on the bus, so the agent gets a
+        // reason instead of the user getting a broken node.
+        std::fs::write(dir.join("report.md"), "# findings").unwrap();
+        let out = call_tool(
+            &bus,
+            "a",
+            Some(&json!({"name": "show_file", "arguments": {"path": "report.md"}})),
+        )
+        .await;
+        assert_eq!(out["isError"], false, "showing a real file works: {out}");
+        let (action, shown, connect_to) = {
+            let cmds = seen.lock().unwrap();
+            let last = cmds.last().unwrap();
+            (
+                last.action.clone(),
+                last.params["path"].clone(),
+                last.params["connectTo"].clone(),
+            )
+        };
+        assert_eq!(action, "show_file");
+        assert_eq!(
+            shown,
+            dir.join("report.md").display().to_string(),
+            "relative became absolute against the workspace"
+        );
+        assert_eq!(connect_to, "a", "the artifact is wired to who showed it");
+
+        let before = seen.lock().unwrap().len();
+        let out = call_tool(
+            &bus,
+            "a",
+            Some(&json!({"name": "show_file", "arguments": {"path": "/etc/hostname"}})),
+        )
+        .await;
+        assert_eq!(out["isError"], true, "an outside path is refused: {out}");
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            before,
+            "and nothing was asked of the canvas"
+        );
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
