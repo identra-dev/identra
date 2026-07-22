@@ -225,6 +225,11 @@ export const workspaceCreate = (title?: string) =>
 export const workspaceOpen = (slug: string) =>
   invoke<Canvas>("workspace_open", { slug });
 
+// Clone a repository into the workspaces root and open it. Takes as long as the network takes;
+// the caller owns saying "cloning" meanwhile. A failure carries git's own words.
+export const workspaceClone = (url: string) =>
+  invoke<WorkspaceMeta>("workspace_clone", { url });
+
 // Folders you already had, opened as workspaces. This is how Identra works on real code rather than
 // only on scratch workspaces it made itself.
 export const workspaceRecents = () =>

@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import BoardPreview from "./BoardPreview";
 import {
+  workspaceClone,
   workspaceCreate,
   workspaceList,
   workspacePickFolder,
@@ -52,6 +53,28 @@ export default function WorkspacePicker({
       onOpen(await workspaceCreate());
     } catch (e) {
       setError(String(e));
+      setBusy(false);
+    }
+  };
+
+  // The clone row: hidden until asked for, because two of three people at this screen have a
+  // folder, not a URL, and a permanent input begs to be filled.
+  const [cloneOpen, setCloneOpen] = useState(false);
+  const [cloneUrl, setCloneUrl] = useState("");
+  const [cloning, setCloning] = useState(false);
+  const clone = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!cloneUrl.trim() || cloning) return;
+    setCloning(true);
+    setBusy(true);
+    setError(null);
+    try {
+      onOpen(await workspaceClone(cloneUrl));
+    } catch (err) {
+      // Git's own words, verbatim. "Repository not found" from git beats anything this file
+      // could paraphrase it into.
+      setError(String(err));
+      setCloning(false);
       setBusy(false);
     }
   };
@@ -113,6 +136,35 @@ export default function WorkspacePicker({
             {busy ? "Working..." : "New empty workspace"}
           </button>
         </div>
+
+        {cloneOpen ? (
+          <form className="identra-picker__clone" onSubmit={(e) => void clone(e)}>
+            <input
+              className="identra-picker__clone-url"
+              value={cloneUrl}
+              onChange={(e) => setCloneUrl(e.target.value)}
+              placeholder="https://github.com/you/your-repo.git"
+              aria-label="Repository URL to clone"
+              disabled={cloning}
+              autoFocus
+            />
+            <button
+              className="identra-picker__clone-go"
+              type="submit"
+              disabled={cloning || cloneUrl.trim() === ""}
+            >
+              {cloning ? "Cloning..." : "Clone"}
+            </button>
+          </form>
+        ) : (
+          <button
+            className="identra-picker__clone-open"
+            onClick={() => setCloneOpen(true)}
+            disabled={busy}
+          >
+            Clone a repository instead
+          </button>
+        )}
 
         {error && <p className="identra-picker__error">{error}</p>}
       </div>

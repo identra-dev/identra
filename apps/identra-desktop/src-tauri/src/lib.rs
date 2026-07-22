@@ -413,6 +413,19 @@ fn workspace_create(
     Ok(meta)
 }
 
+/// Clone a git repository into the workspaces root and open it as a workspace.
+///
+/// Async, because a clone takes as long as the network says it does and the window must not
+/// freeze behind it. The URL is pasted text and stays data all the way down: the engine hands it
+/// to git after `--`, never through a shell.
+#[tauri::command]
+async fn workspace_clone(state: State<'_, AppState>, url: String) -> Result<WorkspaceMeta, String> {
+    let root = workspaces_root()?;
+    let meta = workspace::clone_repo(&root, &url).map_err(|e| e.to_string())?;
+    state.activate(PathBuf::from(&meta.path))?;
+    Ok(meta)
+}
+
 /// Switch to an existing workspace and hand back its canvas.
 ///
 /// The slug is looked up among the workspaces that actually exist, rather than joined onto the root
@@ -633,6 +646,7 @@ pub fn run() {
             wallpaper_add,
             wallpaper_remove,
             workspace_list,
+            workspace_clone,
             workspace_create,
             workspace_open,
             workspace_rename,

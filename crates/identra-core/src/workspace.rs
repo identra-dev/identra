@@ -135,6 +135,66 @@ pub fn create(root: &Path, title: &str) -> io::Result<WorkspaceMeta> {
     })
 }
 
+/// Clone a git repository into the workspaces root and make it a workspace.
+///
+/// The folder name comes from the URL's last segment, slugified and deduped like any other
+/// workspace, so cloning the same repo twice gets `repo` and `repo-2` rather than a refusal.
+///
+/// The URL is a string from the window, so it is passed after `--` and never through a shell.
+/// Without the separator a "url" of `--upload-pack=<command>` is an option, and that option runs
+/// the command; with it, git can only ever read it as a place to clone from.
+pub fn clone_repo(root: &Path, url: &str) -> io::Result<WorkspaceMeta> {
+    let url = url.trim();
+    if url.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "paste the repository's URL first",
+        ));
+    }
+    // The repo's own name: the last path segment, shorn of `.git`. Works for https URLs and for
+    // the scp-like git@host:user/repo.git shape, because both end the same way.
+    let name = url
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .map(|s| s.trim_end_matches(".git"))
+        .filter(|s| !s.is_empty())
+        .unwrap_or(DEFAULT_TITLE);
+    let slug = free_slug(root, &slugify(name));
+    let target = root.join(&slug);
+    std::fs::create_dir_all(root)?;
+
+    // No progress stream: the window shows "cloning" and waits. A huge repo takes as long as it
+    // takes, and git's own summary on failure says more than a bar would have.
+    let out = std::process::Command::new("git")
+        .arg("clone")
+        .arg("--")
+        .arg(url)
+        .arg(&target)
+        .output()?;
+    if !out.status.success() {
+        // git cleans its target up on most failures, but not all. A leftover half-clone has no
+        // canvas so it would never list as a workspace, it would just squat on the name forever.
+        let _ = std::fs::remove_dir_all(&target);
+        let words = String::from_utf8_lossy(&out.stderr);
+        return Err(io::Error::other(words.trim().to_string()));
+    }
+
+    // The same finishing move as create(): a canvas carrying the display name makes the folder a
+    // workspace. The clone is inside the root, so list() finds it by slug like any other.
+    let board = Canvas {
+        title: name.to_string(),
+        ..Canvas::default()
+    };
+    canvas::save(&target, &board)?;
+    Ok(WorkspaceMeta {
+        slug,
+        title: name.to_string(),
+        path: target.display().to_string(),
+        canvas: board,
+    })
+}
+
 /// Where the list of folders opened as workspaces lives.
 ///
 /// A workspace made here is found by scanning the root, but a folder you already had is somewhere
@@ -547,6 +607,66 @@ mod tests {
 
         std::fs::remove_dir_all(&root).unwrap();
         std::fs::remove_dir_all(&outside).unwrap();
+    }
+
+    /// Driven against a real local repo, because the thing under test is the handoff to git and
+    /// what comes back from it, not a mock of either.
+    #[test]
+    fn cloning_lands_a_working_workspace_and_a_bad_url_fails_in_gits_words() {
+        let base = std::env::temp_dir().join(format!("identra-clone-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("root");
+        let origin = base.join("origin").join("my-app.git");
+        std::fs::create_dir_all(&origin).unwrap();
+
+        // A bare origin with one commit, standing in for the remote. Explicit config, because CI
+        // has no user identity and a test must not depend on the machine's.
+        let git = |dir: &Path, args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .current_dir(dir)
+                .args(args)
+                .output()
+                .expect("git runs");
+            assert!(out.status.success(), "git {args:?}: {:?}", out);
+        };
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        git(&src, &["init", "-q"]);
+        git(&src, &["config", "user.email", "t@t"]);
+        git(&src, &["config", "user.name", "t"]);
+        std::fs::write(src.join("main.rs"), "fn main() {}").unwrap();
+        git(&src, &["add", "."]);
+        git(&src, &["commit", "-q", "-m", "one"]);
+        git(
+            &src,
+            &["clone", "-q", "--bare", ".", origin.to_str().unwrap()],
+        );
+
+        let meta = clone_repo(&root, origin.to_str().unwrap()).unwrap();
+        assert_eq!(meta.slug, "my-app", "named by the repo, .git shorn");
+        assert_eq!(meta.title, "my-app");
+        assert!(
+            root.join("my-app").join("main.rs").is_file(),
+            "the code actually arrived"
+        );
+        assert_eq!(list(&root).len(), 1, "and it lists as a workspace");
+
+        // The same repo again is a second workspace, not a refusal and not a clobber.
+        let again = clone_repo(&root, origin.to_str().unwrap()).unwrap();
+        assert_eq!(again.slug, "my-app-2");
+
+        // A url that is not a repo fails in git's own words, and the name it would have taken is
+        // free afterwards rather than squatted on by a half-clone.
+        let err = clone_repo(&root, base.join("nowhere").to_str().unwrap()).unwrap_err();
+        assert!(
+            !err.to_string().is_empty(),
+            "the failure carries git's words"
+        );
+        assert!(!root.join("nowhere").exists());
+
+        assert!(clone_repo(&root, "  ").is_err(), "an empty url is refused");
+
+        std::fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]
