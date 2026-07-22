@@ -1590,3 +1590,25 @@ body {
 .identra-update__later:hover {
   opacity: 1;
 }
+
+/* The product mark. One base rule, sized where it appears: the tile in the png is already dark
+   and rounded, so it needs nothing but a size and the same corner radius everywhere. */
+.identra-logo {
+  display: block;
+  border-radius: 6px;
+  flex: none;
+}
+.identra-home__logo {
+  width: 26px;
+  height: 26px;
+}
+.identra-topbar__logo {
+  width: 22px;
+  height: 22px;
+  align-self: center;
+}
+.identra-onboard__logo {
+  width: 40px;
+  height: 40px;
+  margin: 0 auto 12px;
+}

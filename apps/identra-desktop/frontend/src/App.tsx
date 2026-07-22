@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import logo from "./assets/identra.png";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -984,6 +985,9 @@ export default function App() {
         ))}
 
       <div className="identra-topbar">
+        {/* The mark, not a button: the anchor that says whose desktop this is. Going home is the
+            workspace menu's job, one control to the right. */}
+        <img className="identra-logo identra-topbar__logo" src={logo} alt="" />
         <WorkspaceMenu
           workspace={workspace}
           onOpen={(w) => void openWorkspace(w)}

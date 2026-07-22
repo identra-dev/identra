@@ -1,3 +1,4 @@
+import logo from "./assets/identra.png";
 import type { AgentInfo } from "./api";
 
 // First run with no agent CLI on this machine. Without this the dock is a row of disabled buttons
@@ -31,6 +32,7 @@ export default function Onboarding({ agents, onRecheck }: Props) {
       role="dialog"
       aria-label="Install a coding agent"
     >
+      <img className="identra-logo identra-onboard__logo" src={logo} alt="" />
       <h1 className="identra-onboard__title">No coding agent found</h1>
       <p className="identra-onboard__lead">
         Identra runs coding agents on your machine, it does not ship one.

@@ -3,6 +3,7 @@
 // own wallpaper. The grid is the point: you recognize a board by its shape faster than by
 // reading paths, so the previews are the biggest thing on the screen.
 import { useEffect, useState, type FormEvent } from "react";
+import logo from "./assets/identra.png";
 import BoardPreview from "./BoardPreview";
 import {
   workspaceClone,
@@ -84,6 +85,7 @@ export default function WorkspacePicker({
   return (
     <div className="identra-home">
       <header className="identra-home__nav">
+        <img className="identra-logo identra-home__logo" src={logo} alt="" />
         <span className="identra-home__brand">Identra</span>
         <span className="identra-home__tag">
           A workspace is a folder. Your canvas and your agents live in it.
