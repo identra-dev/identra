@@ -442,76 +442,147 @@ body {
   box-shadow: inset 0 0 0 1.5px var(--state-missing);
 }
 
-/* The workspace picker: the first surface, before there is any canvas to show. Yaru panel on the
-   same dark ground as the canvas, so opening a workspace feels like the same app, not a splash. */
-.identra-picker {
+/* The home screen: a navbar with the three ways in, and the workspaces as a grid of board
+   cards. The preview is the biggest thing on each card because a board is recognized by its
+   shape faster than by its path. */
+.identra-home {
   position: fixed;
   inset: 0;
+  overflow-y: auto;
+  background: var(--bg);
+}
+.identra-home__nav {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   display: flex;
   align-items: center;
-  justify-content: center;
-  background: var(--bg);
-  padding: 24px;
+  gap: 14px;
+  padding: 12px 20px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--panel-edge);
 }
-.identra-picker__panel {
+.identra-home__brand {
+  font-size: 17px;
+  font-weight: 700;
+}
+.identra-home__tag {
+  color: #9a9a9a;
+  font-size: 12px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.identra-home__actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+  flex: none;
+}
+.identra-home__act {
+  background: transparent;
+  border: 1px solid var(--panel-edge);
+  border-radius: 6px;
+  padding: 7px 12px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.identra-home__act:hover:not(:disabled),
+.identra-home__act[data-on="true"] {
+  border-color: var(--yaru-orange);
+}
+.identra-home__act:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.identra-home__act--primary {
+  background: var(--yaru-orange);
+  border-color: var(--yaru-orange);
+  color: #fff;
+  font-weight: 600;
+}
+.identra-home__act--primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.identra-home__clone {
+  display: flex;
+  gap: 8px;
+  max-width: 560px;
+  margin: 14px auto 0;
+  padding: 0 20px;
+}
+.identra-home__error {
+  max-width: 1080px;
+  margin: 14px auto 0;
+  padding: 0 20px;
+  color: #f66151;
+  font-size: 12px;
+}
+.identra-home__empty {
+  max-width: 1080px;
+  margin: 48px auto;
+  padding: 0 20px;
+  color: #9a9a9a;
+  font-size: 14px;
+  text-align: center;
+}
+.identra-home__grid {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 18px;
+  max-width: 1080px;
+  margin: 22px auto 0;
+  padding: 0 20px 32px;
+}
+.identra-home__card {
   width: 100%;
-  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-align: left;
   background: var(--panel);
   border: 1px solid var(--panel-edge);
   border-radius: 10px;
-  padding: 28px;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
-}
-.identra-picker__title {
-  margin: 0;
-  font-size: 22px;
-  font-weight: 600;
-}
-.identra-picker__sub {
-  margin: 6px 0 20px;
-  color: #b8b8b8;
-  font-size: 13px;
-  line-height: 1.45;
-}
-.identra-picker__empty {
-  margin: 0 0 16px;
-  color: #9a9a9a;
-  font-size: 13px;
-}
-.identra-picker__list {
-  list-style: none;
-  margin: 0 0 16px;
-  padding: 0;
-  max-height: 240px;
-  overflow-y: auto;
-}
-.identra-picker__row {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  text-align: left;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  padding: 9px 10px;
+  padding: 10px 10px 12px;
   color: var(--text);
   font: inherit;
   cursor: pointer;
 }
-.identra-picker__row:hover {
-  background: var(--header);
-  border-color: var(--panel-edge);
+.identra-home__card:hover:not(:disabled) {
+  border-color: var(--yaru-orange);
 }
-/* The name and path stack beside the thumbnail. min-width lets the path ellipsis work: a flex
-   child refuses to shrink below its content without it, and paths are long. */
-.identra-picker__text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
+.identra-home__card:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
-/* The board at postage-stamp size, on its own wallpaper. Same scrim rule as the real canvas. */
+/* The card's preview stretches with its cell; the drawing scales through the viewBox. Scoped
+   under the card so it outweighs the fixed postage-stamp size of the base rule below. */
+.identra-home__card .identra-preview {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 5 / 3;
+  border-radius: 6px;
+  margin-bottom: 7px;
+}
+.identra-home__name {
+  font-size: 14px;
+  font-weight: 600;
+  padding: 0 2px;
+}
+.identra-home__path {
+  font-size: 11px;
+  color: #8f8f8f;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 2px;
+}
+
+/* A board in miniature, on its own wallpaper. Same scrim rule as the real canvas. */
 .identra-preview {
   position: relative;
   flex: none;
@@ -530,45 +601,14 @@ body {
   background: var(--wallpaper-scrim);
 }
 /* Above the scrim: the scrim dims the picture, and the node shapes are the point of the tile,
-   so they draw on top of it exactly as real nodes sit above the real canvas. */
+   so they draw on top of it exactly as real nodes sit above the real canvas. The svg carries a
+   viewBox, so it fills whatever size the span is given. */
 .identra-preview svg {
   position: relative;
   z-index: 1;
   display: block;
-}
-.identra-picker__name {
-  font-size: 14px;
-}
-/* The path is the honest part: a workspace is a folder, so say which one. */
-.identra-picker__path {
-  font-size: 11px;
-  color: #8f8f8f;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.identra-picker__new {
   width: 100%;
-  background: var(--yaru-orange);
-  color: #fff;
-  border: 0;
-  border-radius: 6px;
-  padding: 10px 14px;
-  font: inherit;
-  font-weight: 600;
-  cursor: pointer;
-}
-.identra-picker__new:hover {
-  filter: brightness(1.08);
-}
-.identra-picker__new:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-.identra-picker__error {
-  margin: 12px 0 0;
-  color: #f66151;
-  font-size: 12px;
+  height: 100%;
 }
 
 /* A note an agent left for its human. Deliberately unlike a node: no chrome, no ports, nothing to
@@ -1134,39 +1174,6 @@ body {
 
 /* Two ways in, and they are not equal: real work happens in a folder you already have, so that is
    the filled button and an empty workspace is the quiet one beside it. */
-.identra-picker__actions {
-  display: flex;
-  gap: 8px;
-}
-.identra-picker__open {
-  flex: 1;
-  background: var(--yaru-orange);
-  color: #fff;
-  border: 0;
-  border-radius: 6px;
-  padding: 10px 14px;
-  font: inherit;
-  font-weight: 600;
-  cursor: pointer;
-}
-.identra-picker__open:hover {
-  filter: brightness(1.08);
-}
-.identra-picker__open:disabled,
-.identra-picker__new:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-.identra-picker__actions .identra-picker__new {
-  flex: 1;
-  background: transparent;
-  border: 1px solid var(--panel-edge);
-  color: var(--text);
-}
-.identra-picker__actions .identra-picker__new:hover:not(:disabled) {
-  border-color: var(--yaru-orange);
-  filter: none;
-}
 
 /* Removing an adopted folder only forgets it, so it is not painted as destruction. Deleting one
    Identra made takes the folder, and that one turns red. */
@@ -1347,27 +1354,7 @@ body {
   color: #9a9a9a;
 }
 
-/* The clone row. A quiet text link until asked for, then a url input and one button. Most people
-   at this screen have a folder, not a URL, so cloning never competes with the primary actions. */
-.identra-picker__clone-open {
-  margin-top: 10px;
-  background: none;
-  border: none;
-  padding: 0;
-  color: #9a9a9a;
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-  text-decoration: underline;
-}
-.identra-picker__clone-open:hover:not(:disabled) {
-  color: var(--text);
-}
-.identra-picker__clone {
-  display: flex;
-  gap: 8px;
-  margin-top: 10px;
-}
+/* The clone row under the home navbar: a url input and one button. */
 .identra-picker__clone-url {
   flex: 1;
   min-width: 0;
