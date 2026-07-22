@@ -13,7 +13,8 @@ crate-type = ["lib", "cdylib", "staticlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# protocol-asset serves the wallpaper library to the webview under the scope in tauri.conf.json.
+tauri = { version = "2", features = ["protocol-asset"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 identra-core = { path = "../../../crates/identra-core" }

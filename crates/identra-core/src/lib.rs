@@ -14,6 +14,7 @@ pub mod canvas;
 pub mod session;
 pub mod terminal;
 pub mod text;
+pub mod wallpaper;
 pub mod workspace;
 pub mod worktree;
 

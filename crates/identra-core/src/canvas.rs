@@ -41,6 +41,33 @@ pub struct Edge {
     pub target: String,
 }
 
+/// The canvas background, chosen per workspace. A lightweight reference, never image bytes: a
+/// built-in is an id the frontend draws for itself, a color is its hex, an image is a path into
+/// the shared wallpaper library. Keeping bytes out of the canvas is what keeps canvas.json a
+/// layout file a person can read and diff.
+///
+/// Tagged `{"kind": ..., "value": ...}` on the wire because the frontend has to switch on the
+/// kind, and a discriminated union is the one shape TypeScript narrows without ceremony.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(tag = "kind", content = "value", rename_all = "lowercase")]
+pub enum Wallpaper {
+    /// One of the built-in backgrounds, by id. An id this build does not know renders as the
+    /// default, so a canvas from a newer Identra still loads here.
+    Yaru(String),
+    /// A flat color, as a hex string.
+    Color(String),
+    /// A user image, by absolute path into the wallpaper library. If the file is gone (removed
+    /// from the library, or the canvas came from another machine) the frontend falls back to the
+    /// plain background rather than erroring: a missing decoration is not a broken board.
+    Image(String),
+}
+
+impl Default for Wallpaper {
+    fn default() -> Self {
+        Wallpaper::Yaru("yaru-default".into())
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Viewport {
     pub x: f64,
@@ -82,6 +109,10 @@ pub struct Canvas {
     /// node. It is here so the canvas can remember which node the command bar talks to.
     #[serde(default)]
     pub seat: Option<String>,
+    /// The background this workspace wears. Defaulted so every canvas.json written before the
+    /// field existed loads as the plain board it always was.
+    #[serde(default)]
+    pub wallpaper: Wallpaper,
 }
 
 // I write Default by hand because the derived one would give an empty title, and a canvas with no
@@ -97,6 +128,7 @@ impl Default for Canvas {
             // orchestrate, and picking an agent for them before they ask is a node they did not
             // want and are paying for.
             seat: None,
+            wallpaper: Wallpaper::default(),
         }
     }
 }
@@ -324,16 +356,19 @@ mod tests {
             },
             title: "Auth refactor".into(),
             seat: Some("n1".into()),
+            wallpaper: Wallpaper::Image("/home/me/.local/share/identra/wallpapers/a.png".into()),
         };
         save(&dir, &canvas).unwrap();
         assert_eq!(load(&dir), canvas);
 
         // A canvas.json written before `title` existed still loads, with the default name. The same
-        // line covers `seat`, which arrived later still: every canvas on disk today predates it, so
-        // it has to read as "no seat" rather than refusing to load.
+        // lines cover `seat` and `wallpaper`, which arrived later still: every canvas on disk today
+        // predates them, so they have to read as "no seat, plain board" rather than refusing to
+        // load.
         std::fs::write(canvas_path(&dir), r#"{"nodes":[],"edges":[]}"#).unwrap();
         assert_eq!(load(&dir).title, "untitled-workspace");
         assert_eq!(load(&dir).seat, None);
+        assert_eq!(load(&dir).wallpaper, Wallpaper::default());
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -356,6 +391,7 @@ mod tests {
             viewport: Viewport::default(),
             title: "Auth refactor".into(),
             seat: Some("n1".into()),
+            wallpaper: Wallpaper::Color("#16161d".into()),
         };
         assert_eq!(import(&export(&canvas)), Ok(canvas));
     }
@@ -397,5 +433,6 @@ mod tests {
         assert_eq!(canvas.nodes[0].width, 480.0, "defaults fill the gaps");
         assert!(!canvas.nodes[0].locked);
         assert_eq!(canvas.seat, None);
+        assert_eq!(canvas.wallpaper, Wallpaper::default());
     }
 }

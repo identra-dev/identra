@@ -285,9 +285,9 @@ function AgentNodeImpl({ id, data }: NodeProps) {
       </div>
       {recall.length > 0 && recallShown && (
         // Calm and earned, not a popup: it sits above the terminal, states what is known, and gets
-        // out of the way the moment the human is done with it. DESIGN.md calls this the single most
-        // important visual in the product, because it is the one that makes "it remembers" a thing
-        // you see rather than a claim you read.
+        // out of the way the moment the human is done with it. This is the single most important
+        // visual in the product, because it is the one that makes "it remembers" a thing you see
+        // rather than a claim you read.
         <div className="identra-node__recall nodrag">
           <div className="identra-node__recall-head">
             <span>Identra remembers ({recall.length})</span>

@@ -1835,6 +1835,7 @@ mod tests {
             viewport: Default::default(),
             title: "test".into(),
             seat: None,
+            wallpaper: Default::default(),
         };
         canvas::save(&dir, &canvas).unwrap();
 

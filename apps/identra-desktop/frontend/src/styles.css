@@ -17,6 +17,12 @@
      the ring, which has glow spread to carry it, does not. */
   --state-attention: #77216f;
   --edge-idle: #5e5c64;
+  /* Over a user image the UI cannot trust the contrast, so a scrim pulls any picture toward the
+     app's own background, and the grid dots flip to white so they read on what remains. Both are
+     tokens because they are a pair: a light theme would flip them together, dark scrim to light
+     and white dots to black. */
+  --wallpaper-scrim: linear-gradient(#242424ad, #242424b8);
+  --wallpaper-dots: #ffffff47;
 }
 
 * {
@@ -39,8 +45,22 @@ body {
   position: fixed;
   inset: 0;
 }
+/* Transparent so the wallpaper layer behind it shows through. The layer always renders, and its
+   default is the plain --bg this used to be. */
 .react-flow {
-  background: var(--bg);
+  background: transparent;
+}
+.identra-wallpaper {
+  position: absolute;
+  inset: 0;
+}
+/* The required scrim over a user image. Nothing in the app sits on an arbitrary picture
+   directly; this is what keeps white text and grid dots readable on a photo of anything. */
+.identra-wallpaper[data-scrim]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--wallpaper-scrim);
 }
 
 /* Strip react-flow's default node chrome; the .identra-node draws its own. */
@@ -1108,4 +1128,102 @@ body {
   color: var(--text);
   font-size: 13px;
   line-height: 1.4;
+}
+
+/* The wallpaper popover. Above the topbar and dock (both z 6) because it opens from a click that
+   may land under either; its backdrop is what makes any click elsewhere a close. */
+.identra-wallpapers__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 24;
+}
+.identra-wallpapers {
+  position: fixed;
+  z-index: 25;
+  width: 296px;
+  padding: 12px;
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+.identra-wallpapers h4 {
+  margin: 0 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #b8b8b8;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.identra-wallpapers__error {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: #f66151;
+}
+.identra-wallpapers__grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+.identra-wallpapers__cell {
+  position: relative;
+  display: block;
+}
+.identra-wallpapers__tile {
+  display: block;
+  width: 100%;
+  height: 40px;
+  padding: 0;
+  border: 1px solid var(--panel-edge);
+  border-radius: 6px;
+  cursor: pointer;
+  background-size: cover;
+  background-position: center;
+}
+.identra-wallpapers__tile[data-current="true"],
+.identra-wallpapers__swatch[data-current="true"] {
+  outline: 2px solid var(--yaru-orange);
+  outline-offset: 1px;
+}
+.identra-wallpapers__add {
+  background: var(--header);
+  color: var(--text);
+  font-size: 18px;
+  line-height: 1;
+}
+.identra-wallpapers__add:hover {
+  border-color: var(--yaru-orange);
+}
+/* Sits on the tile's corner. Small on purpose: removing is rare and picking is the point. */
+.identra-wallpapers__remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+.identra-wallpapers__remove:hover {
+  background: #5c1a13;
+  color: #f66151;
+}
+.identra-wallpapers__swatches {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+.identra-wallpapers__swatch {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--panel-edge);
+  border-radius: 50%;
+  cursor: pointer;
 }

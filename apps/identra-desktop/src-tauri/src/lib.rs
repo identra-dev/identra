@@ -326,6 +326,56 @@ fn memory_search(
         .map_err(|e| e.to_string())
 }
 
+/// The wallpaper library's images, as absolute paths. The frontend turns each into an asset URL;
+/// the built-in backgrounds never appear here because they are drawn from CSS, not from files.
+#[tauri::command]
+fn wallpapers_list() -> Vec<String> {
+    let Some(dir) = identra_core::wallpaper::library() else {
+        return Vec::new();
+    };
+    identra_core::wallpaper::list(&dir)
+        .into_iter()
+        .map(|p| p.display().to_string())
+        .collect()
+}
+
+/// Ask for an image and copy it into the library. Same rule as every other dialog command: the
+/// picker is the authorization, so the chosen path never crosses the webview boundary in either
+/// direction until it has been copied into the one directory the asset scope serves.
+///
+/// `Ok(None)` is a cancelled dialog, which is an answer, not a failure.
+#[tauri::command]
+async fn wallpaper_add(app: AppHandle) -> Result<Option<String>, String> {
+    let Some(dir) = identra_core::wallpaper::library() else {
+        return Err("cannot find a home directory for the wallpaper library".into());
+    };
+    let Some(chosen) = app
+        .dialog()
+        .file()
+        .set_title("Add a wallpaper")
+        .add_filter("Images", &["png", "jpg", "jpeg", "webp"])
+        .blocking_pick_file()
+    else {
+        return Ok(None);
+    };
+    let source = chosen
+        .into_path()
+        .map_err(|e| format!("that file cannot be opened: {e}"))?;
+    let stored = identra_core::wallpaper::add(&dir, &source)
+        .map_err(|e| format!("that image could not be added: {e}"))?;
+    Ok(Some(stored.display().to_string()))
+}
+
+/// Remove an image from the library. The engine refuses any path that is not directly inside the
+/// library directory, which is what makes it safe to accept a path from the window at all.
+#[tauri::command]
+fn wallpaper_remove(path: String) -> Result<(), String> {
+    let Some(dir) = identra_core::wallpaper::library() else {
+        return Err("cannot find the wallpaper library".into());
+    };
+    identra_core::wallpaper::remove(&dir, Path::new(&path)).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn workspace_list() -> Result<Vec<WorkspaceMeta>, String> {
     let root = workspaces_root()?;
@@ -563,6 +613,9 @@ pub fn run() {
             board_list,
             memory_list,
             memory_search,
+            wallpapers_list,
+            wallpaper_add,
+            wallpaper_remove,
             workspace_list,
             workspace_create,
             workspace_open,

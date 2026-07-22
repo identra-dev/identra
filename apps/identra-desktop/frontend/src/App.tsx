@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ReactFlow,
@@ -25,8 +26,10 @@ import WorkspacePicker from "./WorkspacePicker";
 import WorkPanel from "./WorkPanel";
 import WorkspaceMenu from "./WorkspaceMenu";
 import CommandBar, { type DispatchState } from "./CommandBar";
+import WallpaperPicker from "./WallpaperPicker";
 import { AgentIcon } from "./icons";
 import { tidyPositions } from "./tidy";
+import { backgroundCss, DEFAULT_WALLPAPER, dotColor, needsScrim } from "./wallpaper";
 import {
   composeDispatch,
   planLine,
@@ -55,6 +58,7 @@ import {
   type CanvasCommand,
   type CanvasNode,
   type CanvasResult,
+  type Wallpaper,
   type WorkspaceMeta,
 } from "./api";
 
@@ -116,6 +120,14 @@ export default function App() {
   // current seat, not the one from the render that scheduled the save.
   const [seat, setSeat] = useState<string | null>(null);
   const seatRef = useRef<string | null>(null);
+  // The background this workspace wears. State because the canvas draws it, a ref so snapshot()
+  // writes the current choice rather than the one from the render that scheduled the save.
+  const [wallpaper, setWallpaper] = useState<Wallpaper>(DEFAULT_WALLPAPER);
+  const wallpaperRef = useRef<Wallpaper>(DEFAULT_WALLPAPER);
+  // Where the wallpaper popover is open, or null. Set by right-clicking the canvas background.
+  const [wallMenu, setWallMenu] = useState<{ x: number; y: number } | null>(
+    null,
+  );
   const saveTimer = useRef<number | undefined>(undefined);
   // Is the board on screen different from the board on disk. This is what the close handler asks.
   const unsaved = useRef(false);
@@ -182,6 +194,8 @@ export default function App() {
       : null;
     seatRef.current = restored;
     setSeat(restored);
+    wallpaperRef.current = canvas.wallpaper;
+    setWallpaper(canvas.wallpaper);
     setNodes(loaded);
     setEdges(canvas.edges);
     viewport.current = canvas.viewport;
@@ -200,6 +214,7 @@ export default function App() {
       viewport: viewport.current,
       title: titleRef.current,
       seat: seatRef.current,
+      wallpaper: wallpaperRef.current,
     }),
     [],
   );
@@ -304,6 +319,11 @@ export default function App() {
         : null;
       seatRef.current = restored;
       setSeat(restored);
+      // An imported board may reference an image that is not in this machine's library. It draws
+      // as the plain background rather than erroring, which is the same fallback a removed
+      // library file gets.
+      wallpaperRef.current = imported.wallpaper;
+      setWallpaper(imported.wallpaper);
       setNodes(loaded);
       setEdges(imported.edges);
       viewport.current = imported.viewport;
@@ -331,6 +351,17 @@ export default function App() {
         scheduleSave();
         return next;
       });
+    },
+    [scheduleSave],
+  );
+
+  // Picking a wallpaper applies immediately and rides the debounced save, exactly like moving a
+  // node: the choice is one field on the canvas, not its own persistence path.
+  const pickWallpaper = useCallback(
+    (w: Wallpaper) => {
+      wallpaperRef.current = w;
+      setWallpaper(w);
+      scheduleSave();
     },
     [scheduleSave],
   );
@@ -755,6 +786,14 @@ export default function App() {
           <strong>This workspace is not being saved.</strong> {saveError}
         </div>
       )}
+      {/* The wallpaper is a layer behind the flow, not the flow's own background, so the grid
+          dots and the nodes always sit above it. data-scrim pulls a user image toward the app
+          background; the built-ins and swatches are curated dark values and need no help. */}
+      <div
+        className="identra-wallpaper"
+        data-scrim={needsScrim(wallpaper) || undefined}
+        style={{ background: backgroundCss(wallpaper, convertFileSrc) }}
+      />
       <ReactFlow<FNode>
         nodes={flowNodes}
         edges={edges}
@@ -763,6 +802,12 @@ export default function App() {
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
         onNodesDelete={onNodesDelete}
+        onPaneContextMenu={(e) => {
+          // Right-clicking the empty canvas is where you change what the empty canvas looks
+          // like. The browser menu would cover ours, so it goes.
+          e.preventDefault();
+          setWallMenu({ x: e.clientX, y: e.clientY });
+        }}
         onMoveEnd={(_, vp) => {
           viewport.current = vp;
           scheduleSave();
@@ -779,7 +824,9 @@ export default function App() {
         noWheelClassName={wheelToCanvas ? "identra-wheel-never" : "nowheel"}
         proOptions={{ hideAttribution: true }}
       >
-        <Background color="#3a3a3a" gap={24} />
+        {/* The dots flip to white over anything with its own character, because grey dots
+            disappear into a picture. Over the plain board they keep their quiet grey. */}
+        <Background color={dotColor(wallpaper)} gap={24} />
         <Controls showInteractive={false} />
         {/* Off by default. On a canvas with three nodes it is a box covering the corner for no
             gain; it earns its place once the command center has spawned enough helpers that the
@@ -794,6 +841,15 @@ export default function App() {
           />
         )}
       </ReactFlow>
+
+      {wallMenu !== null && (
+        <WallpaperPicker
+          current={wallpaper}
+          at={wallMenu}
+          onPick={pickWallpaper}
+          onClose={() => setWallMenu(null)}
+        />
+      )}
 
       {/* A blank grid reads as a broken app. With no agent installed the dock is all disabled, so
           the usual hint would point at a dock you cannot use; show the install panel instead. Both

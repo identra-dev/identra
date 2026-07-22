@@ -35,6 +35,15 @@ export type CanvasNode = {
 export type Edge = { id: string; source: string; target: string };
 
 export type Viewport = { x: number; y: number; zoom: number };
+
+// The canvas background. A reference, never image bytes: a built-in background by id, a flat hex
+// color, or an absolute path into the shared wallpaper library. Mirrors the tagged enum in
+// identra-core canvas.rs.
+export type Wallpaper =
+  | { kind: "yaru"; value: string }
+  | { kind: "color"; value: string }
+  | { kind: "image"; value: string };
+
 export type Canvas = {
   nodes: CanvasNode[];
   edges: Edge[];
@@ -44,6 +53,7 @@ export type Canvas = {
   // One id on the canvas rather than a flag per node, so "at most one seat" is a fact about the
   // shape of the data rather than a rule to remember.
   seat: string | null;
+  wallpaper: Wallpaper;
 };
 
 // A workspace is a folder: `path` is where it really lives, `slug` is the folder name and the id,
@@ -171,6 +181,19 @@ export const memoryList = (limit?: number) =>
 
 export const memorySearch = (query: string, limit?: number) =>
   invoke<Memory[]>("memory_search", { query, limit: limit ?? null });
+
+// The shared wallpaper library: images added once, usable from any workspace. Listing returns
+// absolute paths; the canvas layer turns each into an asset URL when it draws.
+export const wallpapersList = () => invoke<string[]>("wallpapers_list");
+
+// Opens a native image picker and copies the choice into the library. Null is a cancelled dialog,
+// which is an answer, not an error.
+export const wallpaperAdd = () => invoke<string | null>("wallpaper_add");
+
+// The engine refuses any path that is not directly inside the library, so this cannot be talked
+// into deleting anything else.
+export const wallpaperRemove = (path: string) =>
+  invoke<void>("wallpaper_remove", { path });
 
 export const workspaceList = () => invoke<WorkspaceMeta[]>("workspace_list");
 
