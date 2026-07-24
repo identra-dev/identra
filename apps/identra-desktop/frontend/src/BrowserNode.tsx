@@ -8,7 +8,7 @@ import { AgentIcon } from "./icons";
 // `cwd` field so it saves and reloads exactly like a node's working dir, no schema change.
 function BrowserNodeImpl({ id, data }: NodeProps) {
   const nodeData = data as AgentNodeData;
-  const { updateNodeData } = useReactFlow();
+  const { updateNodeData, deleteElements } = useReactFlow();
   // `url` is what the iframe loads; `draft` is what's being typed. Splitting them keeps the frame
   // from reloading on every keystroke: it navigates only when a URL is committed.
   const [url, setUrl] = useState(nodeData.cwd || "");
@@ -39,6 +39,16 @@ function BrowserNodeImpl({ id, data }: NodeProps) {
           }}
           onBlur={(e) => commit(e.currentTarget.value)}
         />
+        {/* Every other node type carries this and the browser did not, so a browser you opened
+            had no way off the board short of deleting the workspace. Same control, same class as
+            the file and agent nodes: it routes through onNodesDelete, which saves the canvas. */}
+        <button
+          className="identra-node__close nodrag"
+          title="Close this browser"
+          onClick={() => void deleteElements({ nodes: [{ id }] })}
+        >
+          &times;
+        </button>
       </div>
       <iframe
         className="identra-node__frame nodrag nowheel"
