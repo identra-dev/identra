@@ -165,11 +165,30 @@ export default function App() {
 
   // The first-run panel offers a recheck so a user who just installed an agent does not have to
   // relaunch. This clears the probe cache and refreshes what both the dock and the panel read.
-  const recheckAgents = useCallback(() => {
-    void refreshAgents().then((list) => {
-      agentsRef.current = list;
-      setAgents(list);
-    });
+  // It returns the promise so the panel can show a checking state and a failure, rather than a
+  // button that eats the click in silence.
+  const recheckAgents = useCallback(async () => {
+    const list = await refreshAgents();
+    agentsRef.current = list;
+    setAgents(list);
+  }, []);
+
+  // Backspace outside a text field is history-back in WebKit, and the shell's history is the app
+  // itself: one stray keypress with nothing focused and the window walks backward out of Identra.
+  // Editable targets keep the key, which covers every input here including xterm's hidden
+  // textarea, so typing is untouched and only the navigation gesture dies.
+  useEffect(() => {
+    const guard = (e: KeyboardEvent) => {
+      if (e.key !== "Backspace") return;
+      const t = e.target;
+      const editable =
+        t instanceof HTMLInputElement ||
+        t instanceof HTMLTextAreaElement ||
+        (t instanceof HTMLElement && t.isContentEditable);
+      if (!editable) e.preventDefault();
+    };
+    window.addEventListener("keydown", guard);
+    return () => window.removeEventListener("keydown", guard);
   }, []);
 
   // A terminal and an iframe both need the wheel for their own scrolling, so they swallow it, which
@@ -411,13 +430,27 @@ export default function App() {
   // first save and would answer "yes, pending" forever after. If the flush fails the error is
   // already on screen, and I still close, because refusing to quit over a failed save traps someone
   // in an app they are trying to leave.
+  // One close request owns the exit. A user who clicks close twice while the flush runs must
+  // not start a second save or, worse, race two destroys; and whatever the save does, the window
+  // has to actually go, because an app that refuses to close is holding its user hostage over a
+  // write they cannot see. A tester on macOS hit exactly that wedge.
+  const closing = useRef(false);
   useEffect(() => {
     const win = getCurrentWindow();
     const pending = win.onCloseRequested(async (event) => {
+      if (closing.current) {
+        // The first request is mid-save and will destroy the window itself.
+        event.preventDefault();
+        return;
+      }
       if (!unsaved.current) return;
       event.preventDefault();
-      await saveNow();
-      void win.destroy();
+      closing.current = true;
+      try {
+        await saveNow();
+      } finally {
+        void win.destroy();
+      }
     });
     return () => {
       void pending.then((unlisten) => unlisten());
