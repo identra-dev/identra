@@ -189,6 +189,11 @@ export const memoryList = (limit?: number) =>
 export const memorySearch = (query: string, limit?: number) =>
   invoke<Memory[]>("memory_search", { query, limit: limit ?? null });
 
+// The first fact a workspace ever learns opens the panel once. This returns true on exactly one
+// call per workspace, ever (a durable marker in .identra/), so the reveal cannot re-fire on a
+// later fact or a later session.
+export const memoryRevealOnce = () => invoke<boolean>("memory_reveal_once");
+
 // The command that starts this workspace's dev server, split into argv, or null when the project
 // does not declare one. Read per workspace: the Run control exists exactly when this answers.
 export const devCommand = () => invoke<string[] | null>("dev_command");

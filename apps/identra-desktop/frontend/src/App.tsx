@@ -52,6 +52,8 @@ import {
   devCommand,
   detectAgents,
   isAdopted,
+  memoryList,
+  memoryRevealOnce,
   noAgentsInstalled,
   onCanvasCommand,
   refreshAgents,
@@ -83,6 +85,9 @@ const SAVE_DEBOUNCE_MS = 400;
 // How often the command bar re-reads the board and the seat's state. Slow enough to be free, fast
 // enough that "it is asking you something" does not sit unnoticed. Only runs while a seat exists.
 const SEAT_POLL_MS = 2500;
+// How often the topbar re-reads how many facts the project has learned, for the badge and the
+// one-time reveal. Matches the panel's own poll: two small reads a few seconds apart cost nothing.
+const MEMORY_POLL_MS = 2000;
 const DEFAULT_W = 480;
 const DEFAULT_H = 320;
 
@@ -121,6 +126,12 @@ export default function App() {
   const [edges, setEdges] = useState<FEdge[]>([]);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [panelOpen, setPanelOpen] = useState(false);
+  // The Work panel opens on this tab. A manual open lands on tasks; the first-fact reveal lands on
+  // memory, because memory is the thing it is revealing.
+  const [panelTab, setPanelTab] = useState<"tasks" | "memory">("tasks");
+  // How many facts this project has learned. Drives the ambient badge and the one-time reveal, and
+  // is polled whether or not the panel is open, so the badge is right even while it is closed.
+  const [memoryCount, setMemoryCount] = useState(0);
   const [filesOpen, setFilesOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   // The dev command this workspace declares, or null. Existence is what the Run button keys on.
@@ -684,6 +695,37 @@ export default function App() {
     };
   }, [seat]);
 
+  // The first fact a workspace ever learns opens the panel once, on the memory tab, so the moment
+  // the promise becomes true is seen and not buried under the terminals. memory_reveal_once returns
+  // true on exactly one call per workspace, ever, so this cannot re-fire on a later fact or a later
+  // session; the ref only keeps it from asking the engine on every poll tick this session.
+  const revealAsked = useRef(false);
+  useEffect(() => {
+    if (workspace === null) return;
+    revealAsked.current = false;
+    let dropped = false;
+    const tick = async () => {
+      const list = await memoryList(50).catch(() => null);
+      if (dropped || list === null) return;
+      setMemoryCount(list.length);
+      if (list.length > 0 && !revealAsked.current) {
+        revealAsked.current = true;
+        const first = await memoryRevealOnce().catch(() => false);
+        if (first && !dropped) {
+          setFilesOpen(false);
+          setPanelTab("memory");
+          setPanelOpen(true);
+        }
+      }
+    };
+    void tick();
+    const timer = window.setInterval(() => void tick(), MEMORY_POLL_MS);
+    return () => {
+      dropped = true;
+      window.clearInterval(timer);
+    };
+  }, [workspace]);
+
   const wire = useCallback(
     (from: string, to: string) => {
       setEdges((cur) => {
@@ -1046,6 +1088,11 @@ export default function App() {
           title="What your agents are working on"
         >
           Work
+          {/* The ambient signal that memory is accumulating: a count on the toggle, no toast
+              stream. It reads whether or not the panel is open. */}
+          {memoryCount > 0 && (
+            <span className="identra-topbar__badge">{memoryCount}</span>
+          )}
         </button>
         <button
           className="identra-topbar__btn"
@@ -1117,7 +1164,9 @@ export default function App() {
         </button>
       </div>
 
-      {panelOpen && <WorkPanel onClose={() => setPanelOpen(false)} />}
+      {panelOpen && (
+        <WorkPanel initialTab={panelTab} onClose={() => setPanelOpen(false)} />
+      )}
       {filesOpen && (
         <FilesPanel
           onClose={() => setFilesOpen(false)}
