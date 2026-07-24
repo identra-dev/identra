@@ -608,6 +608,25 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
+            // The window is built here rather than declared in tauri.conf.json for exactly one
+            // reason: the navigation guard only exists on the builder. The shell's own webview
+            // must never become someone's webpage, and a tester proved it can: an unsandboxed
+            // frame plus WebKit's backspace-goes-back walked the whole window off to an external
+            // site. The frontend closes both of those doors; this closes the class, whatever
+            // surface asks for a navigation in the future.
+            tauri::WebviewWindowBuilder::new(app, "main", Default::default())
+                .title("Identra")
+                .inner_size(1280.0, 820.0)
+                .min_inner_size(800.0, 560.0)
+                .on_navigation(|url| match url.scheme() {
+                    // The app itself, packaged, and its asset protocol.
+                    "tauri" | "asset" => true,
+                    // The vite dev server during `tauri dev`, and nothing else over http.
+                    "http" | "https" => cfg!(dev) && url.host_str() == Some("localhost"),
+                    "about" => true,
+                    _ => false,
+                })
+                .build()?;
             // The sink emits each output chunk to the webview as it arrives.
             let handle: AppHandle = app.handle().clone();
             let manager = Arc::new(TerminalManager::new(Arc::new(

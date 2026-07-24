@@ -1612,3 +1612,13 @@ body {
   height: 40px;
   margin: 0 auto 12px;
 }
+
+.identra-onboard__btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.identra-onboard__error {
+  margin: 10px 0 0;
+  color: #f66151;
+  font-size: 12px;
+}
