@@ -143,7 +143,11 @@ fn terminal_start(
         &workspace,
     ));
     let token = state.bus.issue_token(&id);
-    let env = identra_mcp::config::launch_env(&kind, state.mcp_port, &token, &id, &workspace);
+    let mut env = identra_mcp::config::launch_env(&kind, state.mcp_port, &token, &id, &workspace);
+    // The child's PATH leads with the executable's own directory plus everything discovery
+    // searched. A GUI launch inherits the bare system PATH, and codex is an env-node script, so
+    // without this an agent found under nvm spawns and immediately dies looking for node.
+    env.push(("PATH".into(), identra_core::agents::launch_path(&cmd)));
 
     state
         .manager
