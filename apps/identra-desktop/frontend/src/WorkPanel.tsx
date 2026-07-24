@@ -20,8 +20,14 @@ const POLL_MS = 2000;
 
 type Tab = "tasks" | "memory";
 
-export default function WorkPanel({ onClose }: { onClose: () => void }) {
-  const [tab, setTab] = useState<Tab>("tasks");
+export default function WorkPanel({
+  onClose,
+  initialTab = "tasks",
+}: {
+  onClose: () => void;
+  initialTab?: Tab;
+}) {
+  const [tab, setTab] = useState<Tab>(initialTab);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [memories, setMemories] = useState<Memory[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -139,6 +145,16 @@ export default function WorkPanel({ onClose }: { onClose: () => void }) {
         )
       ) : (
         <>
+          {/* The learning state: the moment "any agent you open already knows this project" is
+              becoming true, shown as it happens. aria-live polite so the count is announced as
+              facts arrive rather than only drawn, without stealing focus from the terminal. */}
+          <div className="identra-panel__learning" aria-live="polite">
+            {memories.length === 0
+              ? "Learning this project"
+              : `Learning this project — ${memories.length} ${
+                  memories.length === 1 ? "fact" : "facts"
+                }`}
+          </div>
           <input
             className="identra-panel__search"
             type="search"
@@ -154,8 +170,17 @@ export default function WorkPanel({ onClose }: { onClose: () => void }) {
             </p>
           ) : (
             <ul className="identra-panel__list">
-              {shownMemories.map((m) => (
-                <li key={m.id} className="identra-memory">
+              {shownMemories.map((m, i) => (
+                // The newest fact is the first row when browsing (memory_list is newest-first).
+                // Highlight only it, and only when not searching, so a fresh fact catches the eye
+                // once and the rest of the list stays calm.
+                <li
+                  key={m.id}
+                  className="identra-memory"
+                  data-newest={
+                    query.trim() === "" && i === 0 ? true : undefined
+                  }
+                >
                   {m.content}
                 </li>
               ))}

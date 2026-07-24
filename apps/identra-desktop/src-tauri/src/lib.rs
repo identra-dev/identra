@@ -330,6 +330,27 @@ fn memory_search(
         .map_err(|e| e.to_string())
 }
 
+/// The first fact a workspace ever learns is worth surfacing once: it is the moment the promise
+/// that any agent you open already knows this project first comes true here. This records that the
+/// reveal has happened, durably, in the workspace's own `.identra/`, so it fires exactly once per
+/// workspace and never again, surviving reinstalls. Returns true only on the call that created the
+/// marker, so the window opens the panel on that call and never re-opens on a later fact.
+#[tauri::command]
+fn memory_reveal_once(state: State<AppState>) -> bool {
+    let marker = state.dir().join(".identra").join("revealed");
+    if let Some(parent) = marker.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    // create_new: two quick calls cannot both claim the reveal, the loser gets AlreadyExists and
+    // false. Any other error (an unwritable workspace) also reads as "not the first", which is the
+    // safe way to be wrong: at worst the panel does not auto-open, it never double-opens.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&marker)
+        .is_ok()
+}
+
 /// The command that starts this workspace's dev server, or null when the project does not
 /// declare one. The UI shows a Run button exactly when this answers.
 #[tauri::command]
@@ -717,6 +738,7 @@ pub fn run() {
             board_list,
             memory_list,
             memory_search,
+            memory_reveal_once,
             dev_command,
             file_read,
             file_reveal,

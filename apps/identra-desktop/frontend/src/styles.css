@@ -1622,3 +1622,35 @@ body {
   color: #f66151;
   font-size: 12px;
 }
+
+/* The learning state on the Memory tab: the promise that any agent already knows this project,
+   named at the moment it starts coming true. */
+.identra-panel__learning {
+  padding: 9px 14px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+/* The newest fact, highlighted once: a brief warm wash that settles to the calm row, and a warm
+   left edge, so a fresh fact catches the eye without a toast. */
+.identra-memory[data-newest="true"] {
+  border-left-color: var(--yaru-orange);
+  animation: identra-fact-in 1.4s ease-out;
+}
+@keyframes identra-fact-in {
+  from {
+    background: rgba(233, 84, 32, 0.16);
+  }
+  to {
+    background: var(--bg);
+  }
+}
+/* The ambient memory count on the Work toggle: the same shape as the tab count, no toast stream. */
+.identra-topbar__badge {
+  margin-left: 5px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  background: var(--yaru-orange);
+  color: #fff;
+  font-size: 10px;
+}
