@@ -44,6 +44,12 @@ function BrowserNodeImpl({ id, data }: NodeProps) {
         className="identra-node__frame nodrag nowheel"
         src={url}
         title={nodeData.title || "browser"}
+        // The page in here is whatever the user pointed at, and an unsandboxed iframe can
+        // navigate the TOP window: one target="_top" link and the whole app is replaced by
+        // someone's webpage, which is exactly what a tester hit on macOS. Scripts, same-origin,
+        // and forms are what a dev-server preview needs to run; walking out of the frame is the
+        // one thing this list refuses.
+        sandbox="allow-scripts allow-same-origin allow-forms"
       />
     </div>
   );

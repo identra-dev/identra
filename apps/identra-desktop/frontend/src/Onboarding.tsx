@@ -1,3 +1,4 @@
+import { useState } from "react";
 import logo from "./assets/identra.png";
 import type { AgentInfo } from "./api";
 
@@ -12,7 +13,7 @@ const FRONTED = ["codex", "claude", "gemini", "opencode"];
 
 type Props = {
   agents: AgentInfo[];
-  onRecheck: () => void;
+  onRecheck: () => Promise<void>;
 };
 
 // "a and b", "a, b, and c": read the list back as a sentence rather than a comma dump.
@@ -26,6 +27,23 @@ export default function Onboarding({ agents, onRecheck }: Props) {
   const others = agents
     .filter((a) => FRONTED.includes(a.id) && a.id !== "codex")
     .map((a) => a.name);
+  // The probe is fast, but a button that changes nothing on screen reads as broken, and a
+  // tester read it exactly that way. So the click shows its work: a checking state while the
+  // probe runs, and the failure in words if it fails. Success needs no message here, because
+  // the panel itself disappears the moment an agent is found.
+  const [checking, setChecking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const recheck = async () => {
+    setChecking(true);
+    setError(null);
+    try {
+      await onRecheck();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setChecking(false);
+    }
+  };
   return (
     <div
       className="identra-onboard"
@@ -48,9 +66,18 @@ export default function Onboarding({ agents, onRecheck }: Props) {
           here.
         </p>
       )}
-      <button className="identra-onboard__btn" onClick={onRecheck}>
-        Check again
+      <button
+        className="identra-onboard__btn"
+        disabled={checking}
+        onClick={() => void recheck()}
+      >
+        {checking ? "Checking..." : "Check again"}
       </button>
+      {error !== null && (
+        <p className="identra-onboard__error" role="alert">
+          The check itself failed: {error}
+        </p>
+      )}
     </div>
   );
 }
