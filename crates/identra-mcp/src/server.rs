@@ -1587,11 +1587,19 @@ mod tests {
         );
     }
 
-    /// Off is a choice, and it has to read as one. The suite sets `IDENTRA_EMBEDDINGS=off`, so this
-    /// is also the state every other test in this file runs under: nothing here should ever reach
-    /// for the network, and a status of anything but `off` would mean something did.
+    /// Off is a choice, and it has to read as one: nothing here should ever reach for the network,
+    /// and a status of anything but `off` would mean something did.
+    ///
+    /// The switch is set here rather than inherited from the harness. `just test` and CI both
+    /// export it, but a contributor's reflex is a bare `cargo test`, and this is the one test that
+    /// calls `model_start()` — with embeddings left on, that bare run does not just fail the
+    /// assert, it spawns the 130MB fetch this suite exists to stay clear of. Every test in this
+    /// file wants the model off, so setting it can only move the process toward what they all
+    /// already assume.
     #[test]
     fn switched_off_reads_as_off_rather_than_as_a_failure() {
+        std::env::set_var("IDENTRA_EMBEDDINGS", "off");
+
         assert_eq!(model_status(), ModelStatus::Off);
         // Idempotent and inert: asking for the model while it is switched off must not start
         // anything, which is what makes it safe to call on every workspace open.
