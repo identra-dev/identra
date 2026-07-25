@@ -2,6 +2,7 @@
 // redesign. Everything per-workspace (title, wallpaper, the seat) lives elsewhere on purpose.
 import { useEffect, useState } from "react";
 import { settingsGet, settingsSet, type Settings } from "./api";
+import { useEscape } from "./useEscape";
 
 export default function SettingsPanel({ onClose }: { onClose: () => void }) {
   // Null until the engine answers. The panel renders nothing but its frame in that beat, rather
@@ -13,13 +14,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
     settingsGet().then(setSettings, (e) => setError(String(e)));
   }, []);
 
-  useEffect(() => {
-    const key = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", key);
-    return () => window.removeEventListener("keydown", key);
-  }, [onClose]);
+  useEscape(onClose);
 
   // Optimistic, then honest: the checkbox moves at once, and a failed write puts it back and says
   // why. A toggle that silently did not stick is the settings version of a lost save. Shared by
