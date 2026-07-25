@@ -112,14 +112,17 @@ per workspace.
 ### How much agents do without asking
 
 An approval prompt is reasonable once and unusable four times at once, which is what a canvas of
-parallel agents turns it into. So agents work inside the workspace folder without stopping to ask,
-and Settings has a switch to put every prompt back.
+parallel agents turns it into. Worse, the orchestrator runs headless, so a prompt it stops on is one
+nobody can see: Codex opens a folder it has not met on "Do you trust the contents of this
+directory?" and waits there, and the instruction you typed goes into that menu.
 
-The CLIs enforce that to different depths and it is worth knowing which you are running. Codex has
-a real sandbox, so it is confined to the folder and asks for nothing inside it. Claude and Gemini
-have no sandbox to lean on, so they stop asking about file edits and **still ask before running
-shell commands** — that last prompt is a guard on an unsandboxed home directory, not friction, and
-Identra will not remove it for you.
+So every agent Identra launches starts with every prompt its CLI has a switch for turned off:
+approvals, sandboxing, directory trust, and consenting to Identra's own context bus. They start
+working when they open and they connect to each other on their own.
+
+**That is a real trade and it is on by default, so it is worth saying plainly.** An agent running
+like this can reach anything you can. Run Identra on work you have committed. Settings has one
+switch that puts every prompt back, and then you answer them in the node like any other terminal.
 
 ## Requirements
 

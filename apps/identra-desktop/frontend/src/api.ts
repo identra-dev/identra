@@ -241,9 +241,11 @@ export const fileRead = (path: string) =>
   invoke<FileView>("file_read", { path });
 
 // What is true of this machine, as opposed to of one workspace. Mirrors identra-core settings.rs.
-// How much an agent may do before it stops and asks. "workspace" lets it work freely inside the
-// folder you opened; "ask" leaves each CLI's own prompts alone.
-export type Autonomy = "workspace" | "ask";
+// How much an agent may do before it stops and asks. "bypass" turns off every prompt each CLI has
+// a switch for, including codex's directory trust and claude's MCP consent; "ask" leaves each
+// CLI's own prompts alone. A settings file written before the rename still says "workspace" and
+// the engine reads it as "bypass"; nothing here ever writes that spelling.
+export type Autonomy = "bypass" | "ask";
 
 export type Settings = {
   // Recall by meaning: on fetches a local model once (about 130MB), off matches by words and

@@ -78,8 +78,9 @@ const PROMPT_TAIL_BYTES: usize = 2048;
 ///
 /// This is a guess and it is worth being honest about why it has to be. A CLI over a PTY has no
 /// channel to say "I am waiting for you", so the only evidence is what it printed. I take the last
-/// line that has anything on it and look for the two shapes that a CLI waiting on a human almost
-/// always has: it ends in a question mark, or it offers a choice like `(y/N)`.
+/// line that has anything on it and look for the shapes a CLI waiting on a human almost always
+/// has: it ends in a question mark, it offers a choice like `(y/N)`, or it is sitting on a numbered
+/// menu (`› 1. Yes, continue`) or the "press enter" line one of those leaves underneath itself.
 ///
 /// The caller only asks once the node has already gone quiet, and that precondition does most of
 /// the work: prose that happens to end in a question mark mid-stream is still Running, so it never
@@ -103,12 +104,38 @@ fn looks_like_a_prompt(text: &str) -> bool {
     if line.ends_with('?') {
         return true;
     }
-    // A y/n affordance, in the spellings CLIs actually use. Lower-cased once so `(Y/n)`, the
-    // default-yes form, is not a separate case to remember.
+    // A numbered menu, which is the shape a CLI uses when the answer is not yes or no: codex's
+    // directory-trust dialog ends on `› 1. Yes, continue` / `2. No, quit`. The leading marks are
+    // whatever the TUI draws its selection with.
+    let choice = line.trim_start_matches(|c: char| {
+        c.is_whitespace() || matches!(c, '›' | '❯' | '>' | '*' | '-')
+    });
+    let mut chars = choice.chars();
+    if chars.next().is_some_and(|c| c.is_ascii_digit()) {
+        let rest = chars.as_str();
+        if let Some(after) = rest.strip_prefix(['.', ')']) {
+            if after.starts_with(' ')
+                && after.trim().chars().next().is_some_and(char::is_alphabetic)
+            {
+                return true;
+            }
+        }
+    }
+    // A y/n affordance, in the spellings CLIs actually use, and the line a menu leaves under
+    // itself. Lower-cased once so `(Y/n)`, the default-yes form, is not a separate case to
+    // remember.
     let lowered = line.to_lowercase();
-    ["(y/n)", "[y/n]", "(yes/no)", "[yes/no]", "(y)es", "y/n:"]
-        .iter()
-        .any(|shape| lowered.contains(shape))
+    [
+        "(y/n)",
+        "[y/n]",
+        "(yes/no)",
+        "[yes/no]",
+        "(y)es",
+        "y/n:",
+        "press enter",
+    ]
+    .iter()
+    .any(|shape| lowered.contains(shape))
 }
 
 /// Something that happened to a terminal, in the order it happened.
@@ -603,6 +630,20 @@ mod tests {
         // A TUI draws a cursor or a box edge after the text. The question mark is still the signal.
         assert!(looks_like_a_prompt("Ready to continue? \u{2588}"));
         assert!(looks_like_a_prompt("Shall I run the tests? \u{2502}"));
+
+        // The menu shapes. Codex's directory-trust dialog is the one that actually stranded the
+        // orchestrator seat: headless, so nobody could see it, and quiet, so nothing said why.
+        // Whichever of its two last lines the tail ends on has to read as waiting.
+        assert!(looks_like_a_prompt("\u{203a} 1. Yes, continue"));
+        assert!(looks_like_a_prompt("  2. No, quit"));
+        assert!(looks_like_a_prompt("2) Keep the existing file"));
+        assert!(looks_like_a_prompt("Press enter to continue"));
+
+        // A numbered list is not a menu just because it is numbered. An agent narrating steps ends
+        // lines on ordinary prose, and a version or a count must not pin a node in needs-input.
+        assert!(!looks_like_a_prompt("3 files changed."));
+        assert!(!looks_like_a_prompt("1.2.3"));
+        assert!(!looks_like_a_prompt("2. "));
 
         // The shapes that do not. An agent narrating its work is not asking me anything, even when
         // it says the word question, and a finished summary is the common case that must stay quiet.

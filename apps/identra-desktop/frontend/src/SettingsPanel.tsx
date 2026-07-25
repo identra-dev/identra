@@ -47,12 +47,11 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
             <label className="identra-settings__row">
               <input
                 type="checkbox"
-                checked={settings.autonomy === "workspace"}
+                checked={settings.autonomy === "bypass"}
                 onChange={() =>
                   void apply({
                     ...settings,
-                    autonomy:
-                      settings.autonomy === "workspace" ? "ask" : "workspace",
+                    autonomy: settings.autonomy === "bypass" ? "ask" : "bypass",
                   })
                 }
               />
@@ -60,13 +59,18 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
                 <span className="identra-settings__name">
                   Let agents work without asking
                 </span>
+                {/* Said plainly, including the part that is not comfortable. This is on by
+                    default and it hands an agent the same reach the person at the keyboard
+                    has, so the panel is the wrong place to be coy about it. */}
                 <span className="identra-settings__hint">
-                  Agents edit files in this workspace without stopping for
-                  permission on every change. Codex is also sandboxed to the
-                  folder, so it cannot touch the rest of your machine. Agents
-                  without a sandbox still ask before running shell commands.
-                  Off, every agent keeps its own prompts. Applies to the next
-                  agent you drop.
+                  On, every prompt each agent has a switch for is off:
+                  approvals, sandboxing, folder trust, and consenting to
+                  Identra's own context bus. Agents start working the moment
+                  they open and connect to each other on their own. It also
+                  means an agent can reach anything you can, so run it on work
+                  you have committed. Off, every agent keeps its own prompts and
+                  you answer them in the node. Applies to the next agent you
+                  drop.
                 </span>
               </span>
             </label>

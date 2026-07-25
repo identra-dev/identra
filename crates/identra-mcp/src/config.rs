@@ -216,34 +216,38 @@ pub fn launch_args(kind: &str, port: u16, workspace: &Path) -> Vec<String> {
 /// answers "what may it do once it is there". They are different questions with different reasons
 /// to change, and one of them is a security posture.
 ///
-/// [`Autonomy::Workspace`] means the same intent everywhere — work freely inside the folder the
-/// user opened, stay out of the rest of the machine — but the CLIs enforce that to genuinely
-/// different depths, and pretending otherwise in the code would be the dishonest part:
+/// [`Autonomy::Bypass`] takes every switch each CLI has, and each spells it differently:
 ///
-/// - **codex** has a real OS sandbox, so the intent lands whole: `workspace-write` confines every
-///   write to the workspace, and with that confinement in place `never` asking is safe rather than
-///   reckless. The sandbox is doing the work the prompt was doing.
-/// - **claude** and **gemini** have no sandbox to lean on, so they get the strongest setting that
-///   is still bounded: file edits stop asking, shell commands still do. That is a weaker promise
-///   than codex's and it is deliberately not `bypassPermissions`, which would handle the last
-///   prompt by handing over the whole machine. A prompt that guards `rm -rf ~` is not friction.
-/// - **opencode** takes its config from a file rather than flags, so it gets nothing here.
+/// - **codex** `--dangerously-bypass-approvals-and-sandbox`. This is also the one that clears the
+///   directory-trust dialog, which is the prompt that actually broke the command center: codex
+///   opens a fresh workspace on "Do you trust the contents of this directory?" and waits there.
+///   The seat is headless, so nobody could see the question, and the first instruction was typed
+///   straight into that menu.
+/// - **claude** `--dangerously-skip-permissions`, which covers tool use and consenting to an MCP
+///   server, so the bus attaches without the allow prompt.
+/// - **gemini** `--yolo`. It also takes `--skip-trust` from [`launch_args`] in every mode, since
+///   without it gemini quietly refuses to load project MCP servers at all.
+/// - **opencode** `--auto`.
 ///
-/// [`Autonomy::Ask`] returns nothing at all: each CLI keeps its own default, which is what someone
-/// who turned this off is asking for.
+/// What this costs is worth writing down where the flags are, not only in the settings panel: an
+/// agent launched like this can reach anything the user can. It is the default because the canvas
+/// is several agents at once and the prompts were landing on nodes nobody was looking at, but
+/// [`Autonomy::Ask`] returns nothing at all and each CLI keeps its own defaults, which is what
+/// someone who turned this off is asking for.
+///
+/// Deliberately not here: `--strict-mcp-config` for claude. It would guarantee the bus attaches
+/// with no prompt, and it would do it by ignoring every MCP server the user configured themselves.
+/// Taking someone's own tooling away is not a thing to do quietly as a side effect of a permissions
+/// setting.
 pub fn autonomy_args(kind: &str, autonomy: Autonomy) -> Vec<String> {
     if autonomy == Autonomy::Ask {
         return Vec::new();
     }
     match kind {
-        "codex" => vec![
-            "-c".into(),
-            "approval_policy=\"never\"".into(),
-            "-c".into(),
-            "sandbox_mode=\"workspace-write\"".into(),
-        ],
-        "claude" => vec!["--permission-mode".into(), "acceptEdits".into()],
-        "gemini" => vec!["--approval-mode".into(), "auto_edit".into()],
+        "codex" => vec!["--dangerously-bypass-approvals-and-sandbox".into()],
+        "claude" => vec!["--dangerously-skip-permissions".into()],
+        "gemini" => vec!["--yolo".into()],
+        "opencode" => vec!["--auto".into()],
         _ => Vec::new(),
     }
 }
@@ -590,43 +594,50 @@ mod tests {
         );
     }
 
-    /// The posture, per agent, at the depth each one can actually enforce. Pinned because these are
-    /// the flags that decide what runs on someone's machine without them clicking anything, so a
-    /// change here should have to be deliberate enough to update a test.
+    /// The posture, per agent. Pinned because these are the flags that decide what runs on
+    /// someone's machine without them clicking anything, so a change here should have to be
+    /// deliberate enough to update a test.
     #[test]
-    fn autonomy_asks_for_exactly_as_much_freedom_as_the_agent_can_bound() {
+    fn autonomy_takes_every_switch_each_agent_has() {
         // Off means untouched: whatever each CLI does by default is what someone who turned this
         // off is asking for, and adding flags anyway would be overriding their answer.
         for kind in ["codex", "claude", "gemini", "opencode"] {
             assert!(autonomy_args(kind, Autonomy::Ask).is_empty());
         }
 
-        // Codex has a real sandbox, so it gets the whole intent: confined to the workspace, and
-        // because it is confined, not asking.
-        let codex = autonomy_args("codex", Autonomy::Workspace);
-        assert!(codex.contains(&"sandbox_mode=\"workspace-write\"".to_string()));
-        assert!(codex.contains(&"approval_policy=\"never\"".to_string()));
+        // Every fronted agent has to get something. An agent that silently kept its prompts is one
+        // node on a parallel canvas quietly waiting for a click nobody is looking for, which is the
+        // failure this whole setting exists to remove.
+        for kind in ["codex", "claude", "gemini", "opencode"] {
+            assert!(
+                !autonomy_args(kind, Autonomy::Bypass).is_empty(),
+                "{kind} has a switch for this and must be given it"
+            );
+        }
 
-        // Claude and gemini have no sandbox, so they stop asking about edits and keep asking about
-        // shell. The negative assertion is the point: the day someone "fixes" the last prompt by
-        // reaching for bypassPermissions, this fails and says why.
+        // Codex's is the one that also clears the directory-trust dialog. That prompt is what the
+        // headless orchestrator seat used to open onto and sit at forever, with the user's first
+        // instruction typed into the menu, so this string is load bearing.
         assert_eq!(
-            autonomy_args("claude", Autonomy::Workspace),
-            vec!["--permission-mode", "acceptEdits"]
+            autonomy_args("codex", Autonomy::Bypass),
+            vec!["--dangerously-bypass-approvals-and-sandbox"]
         );
+        assert_eq!(
+            autonomy_args("claude", Autonomy::Bypass),
+            vec!["--dangerously-skip-permissions"]
+        );
+        assert_eq!(autonomy_args("gemini", Autonomy::Bypass), vec!["--yolo"]);
+        assert_eq!(autonomy_args("opencode", Autonomy::Bypass), vec!["--auto"]);
+
+        // Claude's bus consent is bought with the permissions flag above, never by ignoring the
+        // user's own MCP servers. If this ever fails, someone has traded their tooling for a
+        // prompt, which is not ours to trade.
         assert!(
-            !autonomy_args("claude", Autonomy::Workspace)
+            !autonomy_args("claude", Autonomy::Bypass)
                 .iter()
-                .any(|a| a.contains("bypass")),
-            "unsandboxed autonomy stops at edits; the shell prompt is a guard, not friction"
+                .any(|a| a.contains("strict-mcp-config")),
+            "the bus attaches without taking the user's own MCP servers away"
         );
-        assert_eq!(
-            autonomy_args("gemini", Autonomy::Workspace),
-            vec!["--approval-mode", "auto_edit"]
-        );
-
-        // opencode is configured by file, so flags have nothing to say about it.
-        assert!(autonomy_args("opencode", Autonomy::Workspace).is_empty());
     }
 
     /// Two crates hold the same fact and only this one can see both, so this is where it is checked.

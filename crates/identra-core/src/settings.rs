@@ -17,11 +17,24 @@ use std::path::{Path, PathBuf};
 pub enum Autonomy {
     /// Each agent CLI's own default. Every edit and every command waits for a click.
     Ask,
-    /// Free inside the workspace, sandboxed out of everything else. The folder was opened
-    /// deliberately and its contents are under version control; the rest of the machine is not.
-    /// This is the default because it is the posture the product is actually for.
+    /// Every prompt off, in every CLI that has a switch for it: approvals, sandboxing, directory
+    /// trust, and MCP server consent. This is the default, and it is the strongest thing each CLI
+    /// offers, so it is worth being plain about what it costs.
+    ///
+    /// The middle setting this replaced was the sandboxed one: free inside the workspace, walled
+    /// out of the rest of the machine. It was the better posture and it did not survive contact
+    /// with the product, because the prompts it left standing were the ones that actually blocked
+    /// people. Codex stopped on a directory-trust dialog before it would read a word; the others
+    /// stopped on shell commands and on consenting to the bus. On a canvas of parallel agents each
+    /// of those is a separate dialog on a separate node, and the orchestrator sits behind one of
+    /// them holding the instruction the user typed.
+    ///
+    /// So the trade is stated rather than hidden: an agent running under this can reach anything
+    /// the user can. Run it on work you have committed, and [`Ask`](Autonomy::Ask) is one click
+    /// away in Settings for when you would rather be asked.
     #[default]
-    Workspace,
+    #[serde(alias = "workspace")]
+    Bypass,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -123,8 +136,8 @@ mod tests {
 
         assert_eq!(
             load_from(&file).autonomy,
-            Autonomy::Workspace,
-            "agents work inside the folder without asking, by default"
+            Autonomy::Bypass,
+            "agents start with every prompt off, by default"
         );
 
         save_to(
@@ -147,7 +160,19 @@ mod tests {
         std::fs::write(&file, r#"{"embeddings":false}"#).unwrap();
         let upgraded = load_from(&file);
         assert!(!upgraded.embeddings, "the old field survives the upgrade");
-        assert_eq!(upgraded.autonomy, Autonomy::Workspace);
+        assert_eq!(upgraded.autonomy, Autonomy::Bypass);
+
+        // The name this setting used to have. A file written by an older Identra still says
+        // "workspace", and it has to keep loading rather than falling back to the default and
+        // quietly discarding the embeddings choice sitting next to it.
+        std::fs::write(&file, r#"{"embeddings":false,"autonomy":"workspace"}"#).unwrap();
+        let renamed = load_from(&file);
+        assert_eq!(renamed.autonomy, Autonomy::Bypass);
+        assert!(!renamed.embeddings, "its neighbour survives the rename too");
+
+        // And "ask" still means ask. Whatever else moves, the way out has to keep working.
+        std::fs::write(&file, r#"{"autonomy":"ask"}"#).unwrap();
+        assert_eq!(load_from(&file).autonomy, Autonomy::Ask);
 
         // A file someone hand-edited into garbage is defaults, not a crash and not a refusal to
         // start. One re-toggle rewrites it.
