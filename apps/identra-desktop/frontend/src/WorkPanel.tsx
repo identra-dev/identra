@@ -9,6 +9,7 @@ import {
   type ModelStatus,
   type Task,
 } from "./api";
+import { useEscape } from "./useEscape";
 
 // What the agents are coordinating on, for the person watching them.
 //
@@ -42,6 +43,16 @@ export default function WorkPanel({
   // rides the same poll as the board: the model moves between states on its own (a download
   // finishing, a retry succeeding) with no event to subscribe to.
   const [model, setModel] = useState<ModelStatus | null>(null);
+  // Whether the first poll has come back yet.
+  //
+  // Without this the panel opens telling the truth about an empty array rather than about the
+  // project: a workspace with twenty facts painted "Nothing on the board yet" and "Learning this
+  // project" with no count, then snapped to the real numbers a poll later. The empty states are
+  // the most reassuring copy in the app and showing them to someone whose project is full is the
+  // one moment they are actively wrong.
+  const [loaded, setLoaded] = useState(false);
+
+  useEscape(onClose);
 
   const refresh = useCallback(async () => {
     try {
@@ -59,6 +70,11 @@ export default function WorkPanel({
       setError(null);
     } catch (e) {
       setError(String(e));
+    } finally {
+      // In `finally`, because a first poll that failed has still answered the question this
+      // guards: we are no longer in the beat before we knew anything. The error is on screen by
+      // then, and leaving a spinner up underneath it would say the opposite.
+      setLoaded(true);
     }
   }, []);
 
@@ -95,9 +111,14 @@ export default function WorkPanel({
   return (
     <aside className="identra-panel">
       <header className="identra-panel__head">
-        <div className="identra-panel__tabs">
+        {/* A real tablist rather than two buttons that look like one. `data-on` drives the paint
+            and `aria-selected` says the same thing to a screen reader, which otherwise hears two
+            plain buttons and no indication which view is showing. */}
+        <div className="identra-panel__tabs" role="tablist" aria-label="Panel">
           <button
             className="identra-panel__tab"
+            role="tab"
+            aria-selected={tab === "tasks"}
             data-on={tab === "tasks"}
             onClick={() => setTab("tasks")}
           >
@@ -108,16 +129,21 @@ export default function WorkPanel({
           </button>
           <button
             className="identra-panel__tab"
+            role="tab"
+            aria-selected={tab === "memory"}
             data-on={tab === "memory"}
             onClick={() => setTab("memory")}
           >
             Memory {memories.length > 0 && <span>{memories.length}</span>}
           </button>
         </div>
+        {/* `title` is a mouse affordance and nothing else: it never reaches a screen reader on a
+            button whose only content is a glyph, which is announced as "times" or skipped. */}
         <button
           className="identra-panel__close"
           onClick={onClose}
           title="Close"
+          aria-label="Close panel"
         >
           &times;
         </button>
@@ -126,7 +152,14 @@ export default function WorkPanel({
       {error && <p className="identra-panel__error">{error}</p>}
 
       {tab === "tasks" ? (
-        tasks.length === 0 ? (
+        !loaded ? (
+          // One quiet line rather than skeleton rows: the list is usually short and usually
+          // arrives within one frame of the panel opening, so shaped placeholders would flash
+          // more than they reassure.
+          <p className="identra-panel__empty" role="status">
+            Reading the board...
+          </p>
+        ) : tasks.length === 0 ? (
           <p className="identra-panel__empty">
             Nothing on the board yet. Agents put work here when they split a
             task, and claim it so two of them never build the same thing.
@@ -164,11 +197,13 @@ export default function WorkPanel({
               becoming true, shown as it happens. aria-live polite so the count is announced as
               facts arrive rather than only drawn, without stealing focus from the terminal. */}
           <div className="identra-panel__learning" aria-live="polite">
-            {memories.length === 0
-              ? "Learning this project"
-              : `Learning this project — ${memories.length} ${
-                  memories.length === 1 ? "fact" : "facts"
-                }`}
+            {!loaded
+              ? "Reading what this project knows..."
+              : memories.length === 0
+                ? "Learning this project"
+                : `Learning this project — ${memories.length} ${
+                    memories.length === 1 ? "fact" : "facts"
+                  }`}
           </div>
           {/* Why recall might be worse than expected right now, and what to do about it. Only the
               two states worth interrupting for are drawn: "off" is the user's own choice and
@@ -206,13 +241,16 @@ export default function WorkPanel({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
-          {shownMemories.length === 0 ? (
+          {/* The browse empty state is gated on `loaded` and the search one is not: a search has
+              its own answer the moment it returns, while browsing is the case that was claiming
+              an empty project before it had asked. */}
+          {shownMemories.length === 0 && (query.trim() !== "" || loaded) ? (
             <p className="identra-panel__empty">
               {query.trim() === ""
                 ? "Nothing remembered yet. Agents record decisions and constraints here, and every agent you open afterwards starts from them."
                 : "Nothing matched. The closest facts still show for an agent asking over the bus; here, a blank search brings the whole list back."}
             </p>
-          ) : (
+          ) : shownMemories.length === 0 ? null : (
             <ul className="identra-panel__list">
               {shownMemories.map((m, i) => (
                 // The newest fact is the first row when browsing (memory_list is newest-first).
