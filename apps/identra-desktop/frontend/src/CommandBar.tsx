@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 
 // How the last instruction went. The bar is the one place where a user gives an instruction without
 // watching a terminal, so it has to answer for itself: silence after typing is indistinguishable
@@ -21,6 +21,9 @@ type Props = {
   // The seat has stopped and the last thing it printed reads like a question. This is the moment
   // the user is the blocker, and the bar is where the answer goes, so it has to say so.
   awaitingAnswer: boolean;
+  // What the orchestrator has said so far, already stripped of escape sequences. Empty before the
+  // first instruction of a session, which is the one state where the pane is not drawn at all.
+  transcript: string;
   onSubmit: (instruction: string) => void;
 };
 
@@ -35,10 +38,22 @@ export default function CommandBar({
   state,
   plan,
   awaitingAnswer,
+  transcript,
   onSubmit,
 }: Props) {
   const [text, setText] = useState("");
   const busy = state.kind === "sending";
+
+  // Follow the tail as the agent writes, the way a terminal does, but stop following the moment the
+  // user scrolls up: they are reading something, and yanking them back to the bottom every time a
+  // token arrives makes the pane unusable for the one thing it is for. Re-pinning when they return
+  // to the bottom is what makes that reversible without a control to explain.
+  const pane = useRef<HTMLPreElement>(null);
+  const pinned = useRef(true);
+  useEffect(() => {
+    const el = pane.current;
+    if (el !== null && pinned.current) el.scrollTop = el.scrollHeight;
+  }, [transcript]);
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -61,9 +76,30 @@ export default function CommandBar({
         // read or ignore; this is the work being stopped until they answer, and the answer goes in
         // the same box, so it belongs above the input rather than below it.
         <p className="identra-cmd__asking" role="alert">
-          The orchestrator has asked you something and is waiting. Read its
-          node, then answer here.
+          The orchestrator has asked you something and is waiting. Its question
+          is at the end of the conversation above; answer here.
         </p>
+      )}
+      {transcript !== "" && (
+        // The conversation, in the place the instruction was typed. This is the whole point of the
+        // command center being headless: the orchestrator used to land on the canvas as a node, so
+        // typing here meant going somewhere else to find out what happened. Reading and replying in
+        // one place is what a chat is.
+        <pre
+          className="identra-cmd__transcript nodrag nowheel"
+          ref={pane}
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            // A small slack, because a fractional scrollHeight means an element pinned to the
+            // bottom is rarely exactly at it.
+            pinned.current =
+              el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+          }}
+          aria-label="What the orchestrator has said"
+          aria-live="polite"
+        >
+          {transcript}
+        </pre>
       )}
       <div className="identra-cmd__row">
         <span className="identra-cmd__label">
