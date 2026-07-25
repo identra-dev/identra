@@ -74,63 +74,62 @@ fn bus_entry_dollar_syntax(port: u16) -> serde_json::Value {
     })
 }
 
-/// Write the workspace's `.mcp.json`. claude is pointed at this file with `--mcp-config`.
+/// Write the workspace's `.mcp.json`. claude is pointed at this file with `--mcp-config`, and reads
+/// it from the project root on its own too, so it is very often a file the user already owns.
 ///
-/// The port is baked in because I know it when I write this. The token is left as `${VAR}` for
-/// claude to expand from the process env, which is what lets one file serve every node while each
-/// node still authenticates as itself, and keeps the secret off disk.
+/// This merges rather than clobbers: a multi-CLI dev, exactly who Identra is for, most likely
+/// already keeps their own servers in here, and writing over the file would destroy them the first
+/// time they opened the folder in Identra. The port is baked in because I know it when I write
+/// this. The token is left as `${VAR}` for claude to expand from the process env, which lets one
+/// file serve every node while each still authenticates as itself, and keeps the secret off disk.
 pub fn write_mcp_json(workspace: &Path, port: u16) -> io::Result<()> {
-    let body = serde_json::json!({
-        "mcpServers": { BUS_NAME: bus_entry_dollar_syntax(port) },
-    });
-    std::fs::create_dir_all(workspace)?;
-    std::fs::write(mcp_json_path(workspace), pretty(&body))
+    merge_bus_into(&mcp_json_path(workspace), port)
 }
 
-/// Put the bus into the workspace's gemini settings, keeping whatever else is in there.
-///
-/// Gemini has no flag that points it at a config file, so unlike claude this has to land in the
-/// path gemini already reads. A user can legitimately own that file (it holds their theme, model,
-/// and their own MCP servers), so writing over it would quietly destroy their settings the first
-/// time they opened the folder in Identra. I read it, replace only our one key under `mcpServers`,
-/// and write it back.
-///
-/// If the file is there but is not valid JSON, gemini cannot be reading it either, so I move it
-/// aside to `.bak` and start clean. That is the same bargain `canvas.rs` makes with a corrupt
-/// canvas: never silently discard something the user might want back, never let it wedge startup.
+/// Put the bus into the workspace's gemini settings, keeping whatever else is in there. Gemini has
+/// no flag that points it at a config file, so unlike claude this has to land in the path gemini
+/// already reads, which the user legitimately owns (their theme, model, and their own MCP servers).
 pub fn write_gemini_settings(workspace: &Path, port: u16) -> io::Result<()> {
-    let path = gemini_settings_path(workspace);
-    // I keep this as a Map rather than a Value so there is no "is it really an object" question
-    // left to answer further down, and so the merge below needs no unwrap.
-    let mut settings: serde_json::Map<String, serde_json::Value> =
-        match std::fs::read_to_string(&path) {
-            Ok(text) => {
-                match serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&text) {
-                    Ok(map) => map,
-                    // Unparseable, or valid JSON that is not an object (a bare array or string cannot hold
-                    // an mcpServers key). Either way gemini gets nothing useful out of it as it stands.
-                    Err(_) => {
-                        std::fs::rename(&path, path.with_extension("json.bak"))?;
-                        serde_json::Map::new()
-                    }
-                }
-            }
-            Err(e) if e.kind() == io::ErrorKind::NotFound => serde_json::Map::new(),
-            Err(e) => return Err(e),
-        };
+    merge_bus_into(&gemini_settings_path(workspace), port)
+}
 
-    // The `None` arm also covers a settings file whose `mcpServers` exists but is not an object. I
-    // overwrite just that key rather than bailing, because a malformed sub-key should cost the user
-    // their broken value, not the rest of a file that is otherwise fine.
-    match settings
-        .get_mut("mcpServers")
-        .and_then(|s| s.as_object_mut())
-    {
+/// Insert or replace only our one server under `mcpServers` in a JSON-object config file, writing
+/// everything else back untouched. Shared by the two files Identra has to land inside one the user
+/// may already own: claude's `.mcp.json` and gemini's `settings.json`. Both are the multi-CLI dev's
+/// own config as often as not, so clobbering either would destroy their setup the first time they
+/// opened the folder in Identra.
+///
+/// A file that is not valid JSON, or is valid JSON that is not an object (so it cannot hold an
+/// `mcpServers` key), is moved aside to `.bak` rather than discarded, then rewritten clean: the
+/// same bargain `canvas.rs` makes with a corrupt canvas, never silently lose the user's file, never
+/// let it wedge startup. The merge is a fixed point, so re-running it on every open neither grows
+/// nor churns the file.
+fn merge_bus_into(path: &Path, port: u16) -> io::Result<()> {
+    // A Map rather than a Value, so there is no "is it really an object" question left to answer
+    // below and the insert needs no unwrap.
+    let mut root: serde_json::Map<String, serde_json::Value> = match std::fs::read_to_string(path) {
+        Ok(text) => match serde_json::from_str(&text) {
+            Ok(map) => map,
+            // Unparseable, or valid JSON that is not an object (a bare array or string cannot hold
+            // an mcpServers key). Move it aside so the user can get it back, and start clean.
+            Err(_) => {
+                std::fs::rename(path, path.with_extension("json.bak"))?;
+                serde_json::Map::new()
+            }
+        },
+        Err(e) if e.kind() == io::ErrorKind::NotFound => serde_json::Map::new(),
+        Err(e) => return Err(e),
+    };
+
+    // The `None` arm also covers an `mcpServers` that exists but is not an object: overwrite just
+    // that key rather than bailing, so a malformed sub-key costs the user their broken value, not
+    // the rest of a file that is otherwise fine.
+    match root.get_mut("mcpServers").and_then(|s| s.as_object_mut()) {
         Some(servers) => {
             servers.insert(BUS_NAME.into(), bus_entry_dollar_syntax(port));
         }
         None => {
-            settings.insert(
+            root.insert(
                 "mcpServers".into(),
                 serde_json::json!({ BUS_NAME: bus_entry_dollar_syntax(port) }),
             );
@@ -140,7 +139,7 @@ pub fn write_gemini_settings(workspace: &Path, port: u16) -> io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    std::fs::write(path, pretty(&serde_json::Value::Object(settings)))
+    std::fs::write(path, pretty(&serde_json::Value::Object(root)))
 }
 
 /// Write the opencode config Identra points opencode at with `$OPENCODE_CONFIG`.
@@ -443,6 +442,65 @@ mod tests {
         assert!(!body.contains("X-Identra-Node"));
         // It has to be valid json or claude will not read it.
         let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(parsed["mcpServers"]["identra-bus"]["type"], "http");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The .mcp.json is the config most likely to already be the user's own: claude reads it from
+    /// the project root by default. So the merge is the part that matters. Their servers survive,
+    /// the bus lands alongside, and re-running on every open is a fixed point rather than a file
+    /// that grows or churns.
+    #[test]
+    fn mcp_json_merge_keeps_the_users_servers_and_is_idempotent() {
+        let dir = std::env::temp_dir().join(format!("identra-mcpmerge-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(".mcp.json"),
+            r#"{"other":"kept","mcpServers":{"user-own":{"type":"http","url":"http://127.0.0.1:9999/mcp"}}}"#,
+        )
+        .unwrap();
+
+        write_mcp_json(&dir, 8900).unwrap();
+        let first = std::fs::read_to_string(dir.join(".mcp.json")).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&first).unwrap();
+        // Their unrelated key and their own server both survive; the bus lands alongside.
+        assert_eq!(parsed["other"], "kept");
+        assert_eq!(
+            parsed["mcpServers"]["user-own"]["url"],
+            "http://127.0.0.1:9999/mcp"
+        );
+        assert_eq!(parsed["mcpServers"]["identra-bus"]["type"], "http");
+        assert_eq!(parsed["mcpServers"].as_object().unwrap().len(), 2);
+
+        // The same open again must not touch the bytes: two servers, no churn, no growth.
+        write_mcp_json(&dir, 8900).unwrap();
+        let second = std::fs::read_to_string(dir.join(".mcp.json")).unwrap();
+        assert_eq!(first, second, "re-merging is a fixed point");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A .mcp.json that is not JSON is one claude cannot read either, so the bus still has to land.
+    /// What must not happen is losing whatever the user had in there without a trace.
+    #[test]
+    fn corrupt_mcp_json_is_kept_aside_not_dropped() {
+        let dir = std::env::temp_dir().join(format!("identra-mcpbad-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(".mcp.json"), "this is not json at all").unwrap();
+
+        write_mcp_json(&dir, 8900).unwrap();
+
+        // The unreadable original is preserved next to it, not discarded.
+        assert_eq!(
+            std::fs::read_to_string(dir.join(".mcp.json.bak")).unwrap(),
+            "this is not json at all"
+        );
+        // And the fresh file is a clean object carrying the bus.
+        let parsed: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join(".mcp.json")).unwrap()).unwrap();
         assert_eq!(parsed["mcpServers"]["identra-bus"]["type"], "http");
 
         std::fs::remove_dir_all(&dir).unwrap();
