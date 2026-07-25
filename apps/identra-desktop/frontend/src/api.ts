@@ -250,6 +250,19 @@ export type Settings = {
   autonomy: Autonomy;
 };
 
+// What the embedding model is doing. "off" is a choice rather than a problem; "failed" carries the
+// reason it failed with, and is the only one that asks anything of the user.
+export type ModelStatus =
+  | { state: "off" }
+  | { state: "idle" }
+  | { state: "downloading" }
+  | { state: "ready" }
+  | { state: "failed"; reason: string };
+
+export const memoryStatus = () => invoke<ModelStatus>("memory_status");
+
+export const memoryModelRetry = () => invoke<void>("memory_model_retry");
+
 export const settingsGet = () => invoke<Settings>("settings_get");
 
 export const settingsSet = (settings: Settings) =>

@@ -337,6 +337,23 @@ fn memory_search(
         .map_err(|e| e.to_string())
 }
 
+/// What the embedding model is doing, so the memory panel can say why recall is matching on words
+/// rather than leaving the user to wonder whether it is broken or just worse than they expected.
+#[tauri::command]
+fn memory_status() -> identra_mcp::server::ModelStatus {
+    identra_mcp::server::model_status()
+}
+
+/// Ask for the model again after a failure, from the banner's Retry.
+///
+/// Returns nothing and cannot fail: it starts an attempt, and the outcome of that attempt is what
+/// `memory_status` is for. A command that reported success here would be reporting that a thread
+/// was spawned, which is not what the person clicking wants to know.
+#[tauri::command]
+fn memory_model_retry() {
+    identra_mcp::server::model_start();
+}
+
 /// The first fact a workspace ever learns is worth surfacing once: it is the moment the promise
 /// that any agent you open already knows this project first comes true here. This records that the
 /// reveal has happened, durably, in the workspace's own `.identra/`, so it fires exactly once per
@@ -655,6 +672,13 @@ pub fn run() {
                     _ => false,
                 })
                 .build()?;
+            // Start fetching the embedding model now, in the background, rather than on the first
+            // memory call. It used to load lazily, which meant the very first `add_memory` of a
+            // session paid for a 130MB download inside an agent's turn, and the agent simply
+            // appeared to hang. Asking here means the wait happens while the user is still opening
+            // a workspace, and `memory_status` is what tells them it is happening. Returns
+            // immediately; it does nothing if the model is already cached or switched off.
+            identra_mcp::server::model_start();
             // The sink emits each output chunk to the webview as it arrives.
             let handle: AppHandle = app.handle().clone();
             let manager = Arc::new(TerminalManager::new(Arc::new(
@@ -745,6 +769,8 @@ pub fn run() {
             board_list,
             memory_list,
             memory_search,
+            memory_status,
+            memory_model_retry,
             memory_reveal_once,
             dev_command,
             file_read,
