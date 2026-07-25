@@ -10,6 +10,7 @@ import {
   type Wallpaper,
 } from "./api";
 import { BUILTINS, DEFAULT_WALLPAPER, SWATCHES } from "./wallpaper";
+import { useEscape } from "./useEscape";
 
 type Props = {
   current: Wallpaper;
@@ -23,7 +24,12 @@ type Props = {
 const WIDTH = 296;
 const HEIGHT = 320;
 
-export default function WallpaperPicker({ current, at, onPick, onClose }: Props) {
+export default function WallpaperPicker({
+  current,
+  at,
+  onPick,
+  onClose,
+}: Props) {
   const [images, setImages] = useState<string[]>([]);
   // A failed add or remove lands here, inside the popover, because a dialog the user just drove
   // is the one place they are looking.
@@ -35,13 +41,10 @@ export default function WallpaperPicker({ current, at, onPick, onClose }: Props)
 
   useEffect(refresh, [refresh]);
 
-  useEffect(() => {
-    const key = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", key);
-    return () => window.removeEventListener("keydown", key);
-  }, [onClose]);
+  // The shared hook, not a fourth copy of the same listener. That is the whole reason it exists:
+  // a key that dismisses three overlays and not the one you are looking at is worse than a key
+  // that dismisses none, because you have already learned it works.
+  useEscape(onClose);
 
   const add = useCallback(async () => {
     try {

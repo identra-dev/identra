@@ -57,6 +57,7 @@ export default function WorkspaceMenu({
 
   const commitRename = async () => {
     setEditing(false);
+    setError(null);
     if (draft.trim() === workspace.title || !draft.trim()) {
       setDraft(workspace.title);
       return;
@@ -78,6 +79,7 @@ export default function WorkspaceMenu({
   // the most it does is stop listing it. A workspace Identra made is Identra's, and removing it
   // takes the folder, so that one asks first and says what it is taking.
   const remove = async (w: WorkspaceMeta) => {
+    setError(null);
     try {
       if (isAdopted(w)) {
         await workspaceForgetRecent(w.path);
@@ -191,8 +193,24 @@ export default function WorkspaceMenu({
               New empty workspace
             </button>
           </div>
-          {error && <p className="identra-ws__error">{error}</p>}
         </div>
+      )}
+
+      {/* Outside the menu, because the failure that most needs saying happens with the menu shut.
+          Renaming is done inline on the title control, so a rejected name (one that collides, a
+          folder that will not move) used to set an error into a paragraph that only rendered while
+          the dropdown was open: the field simply snapped back to the old name and said nothing. */}
+      {error !== null && (
+        <p className="identra-ws__error" role="alert">
+          {error}
+          <button
+            className="identra-ws__error-close"
+            onClick={() => setError(null)}
+            aria-label="Dismiss"
+          >
+            &times;
+          </button>
+        </p>
       )}
     </div>
   );

@@ -25,15 +25,38 @@ export default function FilesPanel({ onOpenFile, onClose }: Props) {
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<FileHit[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // Has this directory's listing come back yet. The Work panel already learned this lesson: an
+  // empty array before the answer arrives is not an empty folder, and painting "This folder is
+  // empty" over someone's repository root — every time they open the panel, and again on every
+  // folder they click into — is the panel being confidently wrong about the one thing it is for.
+  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
+    // Dropped on the way out, so a slow listing for a folder the user has already navigated past
+    // cannot land under the wrong breadcrumb.
+    let dropped = false;
+    setLoaded(false);
+    // The rows on screen belong to the folder being left. Holding them through the load would show
+    // the old directory's contents under the new one's name.
+    setEntries([]);
     filesList(dir).then(
       (rows) => {
+        if (dropped) return;
         setEntries(rows);
         setError(null);
+        setLoaded(true);
       },
-      (e) => setError(String(e)),
+      (e) => {
+        if (dropped) return;
+        setError(String(e));
+        // Loaded either way: the question this guards is whether we have an answer, and a failure
+        // is one. The error is on screen, and an empty state underneath it would be the truth.
+        setLoaded(true);
+      },
     );
+    return () => {
+      dropped = true;
+    };
   }, [dir]);
 
   // Debounced like the memory search: keystrokes are free, filesystem walks are not.
@@ -67,7 +90,14 @@ export default function FilesPanel({ onOpenFile, onClose }: Props) {
             Files
           </button>
         </div>
-        <button className="identra-panel__close" onClick={onClose} title="Close">
+        {/* `title` is a mouse affordance and nothing else: a screen reader gets nothing usable
+            from a button whose only content is a glyph, so the name goes on aria-label. */}
+        <button
+          className="identra-panel__close"
+          onClick={onClose}
+          title="Close"
+          aria-label="Close panel"
+        >
           &times;
         </button>
       </header>
@@ -103,7 +133,9 @@ export default function FilesPanel({ onOpenFile, onClose }: Props) {
                     )}
                   </span>
                   {h.snippet !== null && (
-                    <span className="identra-fileent__snippet">{h.snippet}</span>
+                    <span className="identra-fileent__snippet">
+                      {h.snippet}
+                    </span>
                   )}
                 </button>
                 <button
@@ -138,7 +170,11 @@ export default function FilesPanel({ onOpenFile, onClose }: Props) {
               </button>
             ))}
           </nav>
-          {entries.length === 0 ? (
+          {!loaded ? (
+            <p className="identra-panel__empty" role="status">
+              Reading this folder...
+            </p>
+          ) : entries.length === 0 ? (
             <p className="identra-panel__empty">This folder is empty.</p>
           ) : (
             <ul className="identra-panel__list">
