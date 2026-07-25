@@ -1389,6 +1389,19 @@ mod tests {
         .unwrap();
         assert_eq!(init["protocolVersion"], "2025-03-26");
         assert_eq!(init["serverInfo"]["name"], "identra-bus");
+        // The instructions ride back on this response or the connect-time injection does not
+        // happen at all. `connect_instructions` is covered on its own further down, but none of
+        // those tests notice if the field stops being wired into the handshake, and that is the
+        // failure worth catching here: every other test would still pass while agents quietly go
+        // back to arriving knowing nothing. Asserted against the guide text rather than a fact,
+        // because the guide is what comes back whether or not this workspace has learned anything.
+        assert!(
+            init["instructions"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("add_memory"),
+            "initialize must carry the connect instructions"
+        );
 
         let list = dispatch(&bus, "node-a", "tools/list", None).await.unwrap();
         let names: Vec<&str> = list["tools"]
