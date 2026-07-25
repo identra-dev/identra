@@ -337,6 +337,26 @@ fn memory_search(
         .map_err(|e| e.to_string())
 }
 
+/// Forget one fact.
+///
+/// The counterpart to `memory_list`'s promise: memory only agents can read is memory the user
+/// cannot check, correct, or trust, and until now the panel delivered two thirds of that. A fact
+/// an agent got wrong stayed wrong, was injected into every later agent's connect, and compounded,
+/// which is the exact failure that makes people stop trusting a memory feature and turn it off.
+///
+/// Deletes rather than tombstones. This is one line of text a user is looking at and has decided
+/// is wrong, and the history log already records that it existed and that it went, so the audit
+/// trail survives without the fact itself outliving the user's decision about it.
+///
+/// `false` means no such fact, which the panel treats as success: it wanted the fact gone, and it
+/// is gone. Two clicks racing on the same row must not surface an error for a state the user
+/// already has.
+#[tauri::command]
+fn memory_forget(state: State<AppState>, id: i64) -> Result<bool, String> {
+    let store = identra_mcp::server::open_memory(&state.dir())?;
+    store.delete(id).map_err(|e| e.to_string())
+}
+
 /// What the embedding model is doing, so the memory panel can say why recall is matching on words
 /// rather than leaving the user to wonder whether it is broken or just worse than they expected.
 #[tauri::command]
@@ -770,6 +790,7 @@ pub fn run() {
             memory_list,
             memory_search,
             memory_status,
+            memory_forget,
             memory_model_retry,
             memory_reveal_once,
             dev_command,

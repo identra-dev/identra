@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   boardList,
+  memoryForget,
   memoryList,
   memoryModelRetry,
   memorySearch,
@@ -10,6 +11,7 @@ import {
   type Task,
 } from "./api";
 import { useEscape } from "./useEscape";
+import { ago } from "./ago";
 
 // What the agents are coordinating on, for the person watching them.
 //
@@ -54,6 +56,14 @@ export default function WorkPanel({
 
   useEscape(onClose);
 
+  // One clock for the whole list, refreshed on the same poll that refreshes the facts. Reading
+  // Date.now() per row would make every row disagree slightly and re-render on every tick for no
+  // visible gain, since the scale here is coarse enough that a second never changes the words.
+  const [nowSeconds, setNowSeconds] = useState(() =>
+    Math.floor(Date.now() / 1000),
+  );
+
+
   const refresh = useCallback(async () => {
     try {
       const [t, m, s] = await Promise.all([
@@ -78,9 +88,30 @@ export default function WorkPanel({
     }
   }, []);
 
+  // Remove it here as well as in the engine, so the row goes on the click rather than on the next
+  // poll up to two seconds later. A refresh follows to reconcile with what actually happened: if
+  // the delete failed, the fact comes straight back, which is the honest outcome rather than a
+  // panel that shows a fact gone while every agent still reads it.
+  const forget = useCallback(
+    async (id: number) => {
+      setMemories((cur) => cur.filter((m) => m.id !== id));
+      setHits((cur) => cur.filter((m) => m.id !== id));
+      try {
+        await memoryForget(id);
+      } catch (e) {
+        setError(String(e));
+      }
+      void refresh();
+    },
+    [refresh],
+  );
+
   useEffect(() => {
     void refresh();
-    const timer = window.setInterval(() => void refresh(), POLL_MS);
+    const timer = window.setInterval(() => {
+      void refresh();
+      setNowSeconds(Math.floor(Date.now() / 1000));
+    }, POLL_MS);
     return () => window.clearInterval(timer);
   }, [refresh]);
 
@@ -263,7 +294,28 @@ export default function WorkPanel({
                     query.trim() === "" && i === 0 ? true : undefined
                   }
                 >
-                  {m.content}
+                  <span className="identra-memory__what">{m.content}</span>
+                  {/* The fact is the row; this is the footnote that makes it checkable. A list
+                      where every line is bare text gives no way to judge one: an agent's guess
+                      from three sessions ago reads exactly like something decided this morning.
+                      Who and when are the two axes anyone scans a memory list on. */}
+                  <span className="identra-memory__meta">
+                    <span>{ago(m.created_at, nowSeconds)}</span>
+                    {m.run_id !== "" && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span>{m.run_id}</span>
+                      </>
+                    )}
+                    <button
+                      className="identra-memory__forget"
+                      onClick={() => void forget(m.id)}
+                      title="Forget this fact"
+                      aria-label={`Forget: ${m.content}`}
+                    >
+                      Forget
+                    </button>
+                  </span>
                 </li>
               ))}
             </ul>
