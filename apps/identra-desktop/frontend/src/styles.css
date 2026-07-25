@@ -281,6 +281,44 @@ body {
    its content: this grows for as long as the agent is working, and a bar that walks up the screen
    while you read it is worse than one that scrolls. The height is roughly a dozen lines, which is
    enough to hold a reply and its reasoning without covering the canvas it is talking about. */
+/* Why recall is worse than it should be, and the way out. Sits under the learning header so it
+   reads as a footnote to the state it qualifies rather than an error about the panel. */
+.identra-panel__model {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #242424;
+  border: 1px solid var(--panel-edge);
+  color: #b9b9b9;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.identra-panel__model[data-failed="true"] {
+  border-color: #7a4a2a;
+}
+/* The CLI's own words for what went wrong. Dimmer than the sentence around it: it is evidence for
+   someone debugging, not the part that has to be read. */
+.identra-panel__model-why {
+  color: #8e8e8e;
+  overflow-wrap: anywhere;
+}
+.identra-panel__model-retry {
+  flex: none;
+  padding: 4px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--panel-edge);
+  background: #2f2f2f;
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.identra-panel__model-retry:hover {
+  background: #3a3a3a;
+}
 .identra-cmd__transcript {
   max-height: 240px;
   overflow-y: auto;

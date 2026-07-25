@@ -2,8 +2,11 @@ import { useCallback, useEffect, useState } from "react";
 import {
   boardList,
   memoryList,
+  memoryModelRetry,
   memorySearch,
+  memoryStatus,
   type Memory,
+  type ModelStatus,
   type Task,
 } from "./api";
 
@@ -35,12 +38,24 @@ export default function WorkPanel({
   // over to ranked search results, so the human can ask the same question an agent would.
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<Memory[]>([]);
+  // Null until the engine first answers, so the banner never flickers a wrong state on open. It
+  // rides the same poll as the board: the model moves between states on its own (a download
+  // finishing, a retry succeeding) with no event to subscribe to.
+  const [model, setModel] = useState<ModelStatus | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      const [t, m] = await Promise.all([boardList(), memoryList(50)]);
+      const [t, m, s] = await Promise.all([
+        boardList(),
+        memoryList(50),
+        // Its own catch, and deliberately not part of the failure above: not knowing what the
+        // model is doing is not a reason to stop showing the board and the facts, which is what
+        // people have the panel open for.
+        memoryStatus().catch(() => null),
+      ]);
       setTasks(t);
       setMemories(m);
+      setModel(s);
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -155,6 +170,35 @@ export default function WorkPanel({
                   memories.length === 1 ? "fact" : "facts"
                 }`}
           </div>
+          {/* Why recall might be worse than expected right now, and what to do about it. Only the
+              two states worth interrupting for are drawn: "off" is the user's own choice and
+              "ready" is the thing working, and narrating either would be noise in a panel people
+              keep open. Facts are still recorded and still found by word in every state, so this
+              is a degrade notice rather than an error. */}
+          {model !== null && model.state === "downloading" && (
+            <p className="identra-panel__model" role="status">
+              Fetching the recall model (about 130MB). Until it lands, memory
+              matches on words. Everything is still being recorded.
+            </p>
+          )}
+          {model !== null && model.state === "failed" && (
+            <p
+              className="identra-panel__model"
+              data-failed="true"
+              role="status"
+            >
+              <span>
+                Memory is matching on words: the recall model did not arrive.{" "}
+                <span className="identra-panel__model-why">{model.reason}</span>
+              </span>
+              <button
+                className="identra-panel__model-retry"
+                onClick={() => void memoryModelRetry().catch(() => {})}
+              >
+                Retry
+              </button>
+            </p>
+          )}
           <input
             className="identra-panel__search"
             type="search"

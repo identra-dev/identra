@@ -72,51 +72,159 @@ const RECALL_LIMIT: usize = 10;
 /// than a personal project accumulates in a week.
 const BROWSE_LIMIT: usize = 50;
 
-/// The embedding model, loaded at most once for the life of the process.
+/// What the embedding model is doing, in the words the window needs to say it.
 ///
-/// Opening a store is cheap and I do it per call, but loading a model is not: it is a second of
-/// CPU and, the very first time, a download. So the store is per call and the model is per process,
-/// which is the only reason `Store` takes an `Arc` here rather than owning its embedder.
+/// This exists because "recall is matching on words right now" is a state the user has to be able
+/// to see and act on. It used to be invisible: the model either loaded or it did not, silently, and
+/// a failure was permanent for the life of the process because it was cached in a `OnceLock`.
+/// Someone who opened the app on a train got word matching until they quit and reopened, with
+/// nothing on screen saying so or offering to try again.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "state", rename_all = "lowercase")]
+pub enum ModelStatus {
+    /// Turned off, by the settings panel or by `IDENTRA_EMBEDDINGS=off`. Not a problem to report.
+    Off,
+    /// On, wanted, and not fetched yet. Nothing is happening until something asks.
+    Idle,
+    /// A fetch is in flight. Indeterminate: the model host does not give us a total we can trust,
+    /// and a fake percentage is worse than an honest spinner.
+    Downloading,
+    /// Loaded. Recall matches by meaning.
+    Ready,
+    /// The last attempt failed, and this is why, in the words it failed with. Retryable: the whole
+    /// point of the slot is that this is not the end of the story.
+    Failed { reason: String },
+}
+
+/// The one model and whatever is currently true of it.
 ///
-/// A failure is a downgrade, not an error. No model means recall matches on words, which is worse
-/// but works, and it is what someone offline gets. I cache the failure too: if the model is not
-/// coming, retrying it on every single memory call would freeze the agent's turn over and over for
-/// the same answer.
+/// A mutex rather than a `OnceLock` because a failure has to be forgettable. `OnceLock` fixes the
+/// first answer for the life of the process, which is right for a value and wrong for a network
+/// fetch: the first attempt happens under whatever conditions the user was in at the time, and
+/// "offline then, online now" is the normal shape of a laptop.
+#[cfg(feature = "fastembed")]
+mod model {
+    use super::ModelStatus;
+    use identra_memory as memory;
+    use std::sync::{Arc, Mutex, OnceLock};
+
+    pub enum Slot {
+        Idle,
+        Downloading,
+        Ready(Arc<memory::LocalEmbedder>),
+        Failed(String),
+    }
+
+    /// The lock itself is created on first touch; the model inside it is not. That distinction is
+    /// the whole design: reaching for the slot must never be what triggers a 130MB download.
+    fn slot() -> &'static Mutex<Slot> {
+        static SLOT: OnceLock<Mutex<Slot>> = OnceLock::new();
+        SLOT.get_or_init(|| Mutex::new(Slot::Idle))
+    }
+
+    /// Off has two switches, and both are read live rather than cached. The env var is for tests
+    /// and scripts: a suite that pulls 130MB from a model host fails for reasons that have nothing
+    /// to do with the code, and a workspace build turns this feature on for every crate whether it
+    /// wanted it or not. The settings file is the user's own toggle.
+    fn switched_off() -> bool {
+        std::env::var("IDENTRA_EMBEDDINGS").is_ok_and(|v| v == "off")
+            || !identra_core::settings::load().embeddings
+    }
+
+    pub fn status() -> ModelStatus {
+        // Asked before the slot, so turning it off in the panel reads as off immediately rather
+        // than as whatever the model happened to be doing when it was turned off.
+        if switched_off() {
+            return ModelStatus::Off;
+        }
+        match &*slot().lock().unwrap() {
+            Slot::Idle => ModelStatus::Idle,
+            Slot::Downloading => ModelStatus::Downloading,
+            Slot::Ready(_) => ModelStatus::Ready,
+            Slot::Failed(reason) => ModelStatus::Failed {
+                reason: reason.clone(),
+            },
+        }
+    }
+
+    /// The model if it is loaded, and never the act of loading it.
+    ///
+    /// This is on the path of every memory call including the connect-time read, so it has to
+    /// return now. Blocking here is what used to let a cold cache stall an agent's whole handshake
+    /// behind a download.
+    pub fn ready() -> Option<Arc<dyn memory::Embedder>> {
+        match &*slot().lock().unwrap() {
+            Slot::Ready(m) => Some(m.clone() as Arc<dyn memory::Embedder>),
+            _ => None,
+        }
+    }
+
+    /// Begin fetching, unless it is off, already loaded, or already in flight.
+    ///
+    /// Returns immediately; the work happens on its own thread. Retryable by construction: a
+    /// `Failed` slot is a legal starting point, which is what makes the Retry button mean
+    /// something rather than redisplaying a cached refusal.
+    pub fn start() {
+        if switched_off() {
+            return;
+        }
+        {
+            let mut guard = slot().lock().unwrap();
+            match &*guard {
+                // Already done, or someone else is already doing it. Two callers racing the button
+                // must not become two downloads.
+                Slot::Ready(_) | Slot::Downloading => return,
+                Slot::Idle | Slot::Failed(_) => *guard = Slot::Downloading,
+            }
+        }
+        std::thread::spawn(|| {
+            let outcome = memory::LocalEmbedder::new();
+            let mut guard = slot().lock().unwrap();
+            *guard = match outcome {
+                Ok(m) => Slot::Ready(Arc::new(m)),
+                Err(e) => {
+                    // Said once, here, rather than on every memory call that then quietly degrades.
+                    eprintln!("identra: recall is matching on words, not meaning: {e}");
+                    Slot::Failed(e.to_string())
+                }
+            };
+        });
+    }
+}
+
 #[cfg(feature = "fastembed")]
 fn shared_embedder() -> Option<std::sync::Arc<dyn memory::Embedder>> {
-    use std::sync::OnceLock;
-    static MODEL: OnceLock<Option<std::sync::Arc<memory::LocalEmbedder>>> = OnceLock::new();
-    MODEL
-        .get_or_init(|| {
-            // The one thing in Identra that reaches the network, so it gets two ways to say no.
-            // The env is for tests and scripts: a suite that pulls 130MB from a model host fails
-            // for reasons that have nothing to do with the code, and a workspace build turns this
-            // feature on for every crate whether it wanted it or not. The settings file is the
-            // user's own switch, written by the settings panel. Read here, at the same gate,
-            // because the OnceLock means the answer is fixed for the life of the process anyway
-            // and this is the one place it is asked.
-            if std::env::var("IDENTRA_EMBEDDINGS").is_ok_and(|v| v == "off") {
-                return None;
-            }
-            if !identra_core::settings::load().embeddings {
-                return None;
-            }
-            match memory::LocalEmbedder::new() {
-                Ok(model) => Some(std::sync::Arc::new(model)),
-                Err(e) => {
-                    eprintln!("identra: recall is matching on words, not meaning: {e}");
-                    None
-                }
-            }
-        })
-        .clone()
-        .map(|m| m as std::sync::Arc<dyn memory::Embedder>)
+    model::ready()
+}
+
+/// What the model is doing, for the window to show. Public because the degrade banner and its
+/// Retry button are the user-facing half of this.
+#[cfg(feature = "fastembed")]
+pub fn model_status() -> ModelStatus {
+    model::status()
+}
+
+/// Ask for the model. Called when a workspace opens and by the Retry button; safe to call often.
+#[cfg(feature = "fastembed")]
+pub fn model_start() {
+    model::start();
 }
 
 #[cfg(not(feature = "fastembed"))]
 fn shared_embedder() -> Option<std::sync::Arc<dyn memory::Embedder>> {
     None
 }
+
+/// Built without the model at all, so there is nothing to be downloading or to retry. Off is the
+/// honest answer rather than a failure the user could act on, and it keeps the window's one code
+/// path working across both builds.
+#[cfg(not(feature = "fastembed"))]
+pub fn model_status() -> ModelStatus {
+    ModelStatus::Off
+}
+
+#[cfg(not(feature = "fastembed"))]
+pub fn model_start() {}
 
 /// Open the workspace's memory, creating `.identra/` on the first write.
 ///
@@ -1452,6 +1560,43 @@ mod tests {
         );
 
         assert!(dispatch(&bus, "node-a", "nonsense", None).await.is_err());
+    }
+
+    /// The banner reads these off the wire by their tag, so the wire shape is the contract and a
+    /// rename would silently stop the degrade notice ever appearing. Serialization is the thing
+    /// worth pinning here; the download itself is not testable offline, which is the whole reason
+    /// the suite runs with embeddings off.
+    #[test]
+    fn model_status_serializes_the_way_the_banner_reads_it() {
+        let json = |s: &ModelStatus| serde_json::to_value(s).unwrap();
+
+        assert_eq!(json(&ModelStatus::Off), json!({"state": "off"}));
+        assert_eq!(json(&ModelStatus::Idle), json!({"state": "idle"}));
+        assert_eq!(
+            json(&ModelStatus::Downloading),
+            json!({"state": "downloading"})
+        );
+        assert_eq!(json(&ModelStatus::Ready), json!({"state": "ready"}));
+        // The reason rides along, because "it failed" without the words it failed with leaves the
+        // user with a Retry button and no idea whether pressing it could possibly help.
+        assert_eq!(
+            json(&ModelStatus::Failed {
+                reason: "no route to host".into()
+            }),
+            json!({"state": "failed", "reason": "no route to host"})
+        );
+    }
+
+    /// Off is a choice, and it has to read as one. The suite sets `IDENTRA_EMBEDDINGS=off`, so this
+    /// is also the state every other test in this file runs under: nothing here should ever reach
+    /// for the network, and a status of anything but `off` would mean something did.
+    #[test]
+    fn switched_off_reads_as_off_rather_than_as_a_failure() {
+        assert_eq!(model_status(), ModelStatus::Off);
+        // Idempotent and inert: asking for the model while it is switched off must not start
+        // anything, which is what makes it safe to call on every workspace open.
+        model_start();
+        assert_eq!(model_status(), ModelStatus::Off);
     }
 
     /// A handoff must not need a human. The nudge is typed into the peer's live prompt, so the
