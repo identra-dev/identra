@@ -6,6 +6,24 @@ use serde::{Deserialize, Serialize};
 use std::io;
 use std::path::{Path, PathBuf};
 
+/// How much an agent may do before it stops and asks a human.
+///
+/// A canvas is several agents working at once, and every one of them stopping on its own approval
+/// prompt turns the canvas into a queue of things waiting for the same person. That is the failure
+/// this setting exists to name: the prompts are individually reasonable and collectively the reason
+/// nobody leaves the app running.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Autonomy {
+    /// Each agent CLI's own default. Every edit and every command waits for a click.
+    Ask,
+    /// Free inside the workspace, sandboxed out of everything else. The folder was opened
+    /// deliberately and its contents are under version control; the rest of the machine is not.
+    /// This is the default because it is the posture the product is actually for.
+    #[default]
+    Workspace,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Settings {
     /// Whether recall may use the local embedding model. On matches by meaning but fetches the
@@ -14,6 +32,12 @@ pub struct Settings {
     /// setting the panel got.
     #[serde(default = "default_true")]
     pub embeddings: bool,
+    /// What an agent may do without asking. See [`Autonomy`].
+    ///
+    /// `#[serde(default)]` matters on an upgrade: a settings file written before this field existed
+    /// has to keep loading, and it lands on `Workspace` with everything else it had intact.
+    #[serde(default)]
+    pub autonomy: Autonomy,
 }
 
 fn default_true() -> bool {
@@ -22,7 +46,10 @@ fn default_true() -> bool {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { embeddings: true }
+        Settings {
+            embeddings: true,
+            autonomy: Autonomy::default(),
+        }
     }
 }
 
@@ -94,11 +121,33 @@ mod tests {
             "recall by meaning is the shipped default"
         );
 
-        save_to(&file, &Settings { embeddings: false }).unwrap();
+        assert_eq!(
+            load_from(&file).autonomy,
+            Autonomy::Workspace,
+            "agents work inside the folder without asking, by default"
+        );
+
+        save_to(
+            &file,
+            &Settings {
+                embeddings: false,
+                autonomy: Autonomy::Ask,
+            },
+        )
+        .unwrap();
         assert!(
             !load_from(&file).embeddings,
             "the toggle comes back as written"
         );
+        assert_eq!(load_from(&file).autonomy, Autonomy::Ask);
+
+        // A settings file written before `autonomy` existed still loads, keeps what it did say, and
+        // lands on the default for what it did not. Without this an upgrade would silently reset
+        // someone's embeddings choice, which is the kind of thing that reads as data loss.
+        std::fs::write(&file, r#"{"embeddings":false}"#).unwrap();
+        let upgraded = load_from(&file);
+        assert!(!upgraded.embeddings, "the old field survives the upgrade");
+        assert_eq!(upgraded.autonomy, Autonomy::Workspace);
 
         // A file someone hand-edited into garbage is defaults, not a crash and not a refusal to
         // start. One re-toggle rewrites it.
