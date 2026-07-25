@@ -1,0 +1,97 @@
+name: traffic
+
+# GitHub keeps repository traffic for 14 days and then deletes it. Nothing else in this project is
+# lossy like that: the code, the issues and the releases are all still there next year, and how
+# people actually found this is gone in a fortnight. This captures it before it expires.
+#
+# Weekly rather than daily. The API returns a rolling 14 day window, so a weekly run always overlaps
+# the last one and cannot leave a gap, and a daily run would buy the same numbers seven times.
+on:
+  schedule:
+    # Sundays, early UTC. Nothing depends on the hour; it is off the weekday release path.
+    - cron: "17 4 * * 0"
+  workflow_dispatch:
+
+# A manual run kicked off while the weekly one is going would push two snapshots into the same
+# archive at once. Queue instead of cancel: the point is not to lose a capture.
+concurrency:
+  group: traffic
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    # Hoisted to the job so the `if:` below can read them. The `secrets` context is not dependable
+    # inside a step condition, and a condition that silently evaluates to false would skip the
+    # archive step without ever saying why, which is the failure mode this whole job exists to
+    # avoid: data quietly not being kept.
+    env:
+      TRAFFIC_PAT: ${{ secrets.TRAFFIC_PAT }}
+      TRAFFIC_ARCHIVE_REPO: ${{ vars.TRAFFIC_ARCHIVE_REPO }}
+    steps:
+      # Deliberately no `actions/checkout` of this repo. The job needs no source, and not checking
+      # it out means there is no working tree here that acquisition data could ever be committed
+      # into by accident.
+      - name: Capture the traffic API
+        env:
+          # The default GITHUB_TOKEN cannot read the traffic endpoints at all: they require push
+          # access, which a workflow token does not have, and the failure is a 403 rather than an
+          # empty result. So this needs a PAT with repo scope, stored as a secret.
+          GH_TOKEN: ${{ env.TRAFFIC_PAT }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "TRAFFIC_PAT is not set. Create a PAT with repo scope and add it as a repository"
+            echo "secret named TRAFFIC_PAT, or this job can never read the traffic API."
+            exit 1
+          fi
+
+          stamp="$(date -u +%Y-%m-%d)"
+          mkdir -p out
+
+          # Four endpoints, one file. Referrers and paths are the two that answer "how did people
+          # find this", which is the question the whole job exists for; views and clones are the
+          # size of the answer.
+          for ep in views clones popular/referrers popular/paths; do
+            name="$(echo "$ep" | tr '/' '-')"
+            gh api "repos/$REPO/traffic/$ep" > "out/$name.json"
+          done
+
+          jq -n \
+            --arg captured_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg repo "$REPO" \
+            --slurpfile views out/views.json \
+            --slurpfile clones out/clones.json \
+            --slurpfile referrers out/popular-referrers.json \
+            --slurpfile paths out/popular-paths.json \
+            '{captured_at: $captured_at, repo: $repo, views: $views[0], clones: $clones[0], referrers: $referrers[0], paths: $paths[0]}' \
+            > "out/traffic-$stamp.json"
+
+          echo "STAMP=$stamp" >> "$GITHUB_ENV"
+
+      # Where the data goes matters as much as capturing it. This is acquisition data about real
+      # people's referrers; it belongs in a private repo, never committed here.
+      - name: Archive to the private repo
+        if: ${{ env.TRAFFIC_ARCHIVE_REPO != '' }}
+        env:
+          GH_TOKEN: ${{ env.TRAFFIC_PAT }}
+          ARCHIVE: ${{ env.TRAFFIC_ARCHIVE_REPO }}
+        run: |
+          set -euo pipefail
+          # Committed through the API rather than by cloning, so the archive never lands on disk
+          # next to this repo and no push here can carry it.
+          gh api -X PUT "repos/$ARCHIVE/contents/traffic/traffic-$STAMP.json" \
+            -f message="traffic snapshot $STAMP" \
+            -f content="$(base64 -w0 < "out/traffic-$STAMP.json")" \
+            || echo "archive write failed; the artifact below is the fallback copy"
+
+      # The fallback, and only that. Artifacts expire in 90 days, which is longer than the 14 this
+      # is rescuing data from and still not an archive. If TRAFFIC_ARCHIVE_REPO is unset, this is
+      # the only copy and it is on a timer.
+      - name: Upload as an artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: traffic-${{ env.STAMP }}
+          path: out/traffic-${{ env.STAMP }}.json
+          retention-days: 90
