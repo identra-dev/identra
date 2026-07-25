@@ -191,15 +191,6 @@ index. If you have no model configured, it stores the raw text instead of guessi
 degrades quietly, it never blocks your work and it never calls out to a server you did not ask
 it to.
 
-## Built with Codex
-
-<!-- TODO before submitting. Fill this in yourself, from what you actually did. Do not let anyone
-     draft it for you and do not soften it: it is a statement to the judges about how this was
-     built, and the only version worth writing is the true one. Name the parts Codex wrote or
-     unblocked, say which model, and if GPT-5.6 access never landed then say the model you really
-     used. A thin honest paragraph beats a thick invented one, and an invented one is the only
-     thing here that can actually cost you the entry. Delete this comment when it is written. -->
-
 ## Where your data lives
 
 - Canvas state: `.identra/canvas.json` inside each project (gitignored by default).
