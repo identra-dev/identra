@@ -30,12 +30,17 @@ import WorkspacePicker from "./WorkspacePicker";
 import SettingsPanel from "./SettingsPanel";
 import WorkPanel from "./WorkPanel";
 import WorkspaceMenu from "./WorkspaceMenu";
-import CommandBar, { type DispatchState } from "./CommandBar";
+import CommandBar, { MOD_LABEL, type DispatchState } from "./CommandBar";
 import FocusView from "./FocusView";
 import WallpaperPicker from "./WallpaperPicker";
 import { AgentIcon } from "./icons";
 import { tidyPositions } from "./tidy";
-import { backgroundCss, DEFAULT_WALLPAPER, dotColor, needsScrim } from "./wallpaper";
+import {
+  backgroundCss,
+  DEFAULT_WALLPAPER,
+  dotColor,
+  needsScrim,
+} from "./wallpaper";
 import {
   composeDispatch,
   planLine,
@@ -528,23 +533,20 @@ export default function App() {
   // the engine side goes: the PTY, the resumed conversation, and the node's bus credential. A node
   // that never launched has no terminal to kill and the engine says so; that is not a failure worth
   // showing anyone, but it must not become an unhandled rejection either.
-  const onNodesDelete = useCallback(
-    (deleted: FNode[]) => {
-      for (const n of deleted) {
-        void terminalKill(n.id).catch((err) => {
-          console.warn(`could not close node ${n.id} cleanly`, err);
-        });
-      }
-      // No seat to vacate here. The orchestrator is headless, so deleting a node can never be the
-      // thing that takes the command center's agent away; it goes when its process does, which the
-      // liveness check at dispatch notices on its own.
-      // A focus view over a node that just went is a window onto nothing; back to the canvas.
-      setFocused((cur) =>
-        cur !== null && deleted.some((n) => n.id === cur) ? null : cur,
-      );
-    },
-    [assignSeat],
-  );
+  const onNodesDelete = useCallback((deleted: FNode[]) => {
+    for (const n of deleted) {
+      void terminalKill(n.id).catch((err) => {
+        console.warn(`could not close node ${n.id} cleanly`, err);
+      });
+    }
+    // No seat to vacate here. The orchestrator is headless, so deleting a node can never be the
+    // thing that takes the command center's agent away; it goes when its process does, which the
+    // liveness check at dispatch notices on its own.
+    // A focus view over a node that just went is a window onto nothing; back to the canvas.
+    setFocused((cur) =>
+      cur !== null && deleted.some((n) => n.id === cur) ? null : cur,
+    );
+  }, []);
 
   // Returns the new node's id, because an agent that asked for this needs to be able to name it.
   const addNode = useCallback(
@@ -1052,14 +1054,6 @@ export default function App() {
 
   return (
     <div className="identra-root">
-      {saveError !== null && (
-        // It stays until a save works. A canvas that is not on disk is not a thing to mention once
-        // and then hide: every drag from here is work that will not be there tomorrow, and the user
-        // is the only one who can do anything about a full disk or a folder they cannot write to.
-        <div className="identra-save-error" role="alert">
-          <strong>This workspace is not being saved.</strong> {saveError}
-        </div>
-      )}
       {/* The wallpaper is a layer behind the flow, not the flow's own background, so the grid
           dots and the nodes always sit above it. data-scrim pulls a user image toward the app
           background; the built-ins and swatches are curated dark values and need no help. */}
@@ -1134,117 +1128,147 @@ export default function App() {
         ) : (
           <div className="identra-empty">
             <p className="identra-empty__lead">This workspace is empty.</p>
+            {/* Two ways in, in the order they are worth trying. Saying what you want is the whole
+                product and it is one keystroke away, so it leads; the dock is the manual path for
+                when you already know which agent you want. An empty canvas is the one screen where
+                naming the shortcut costs nothing, and it is where someone is looking for a way in. */}
             <p className="identra-empty__hint">
-              Pick an agent from the dock below to run it here. Drop in a second
-              one and draw a wire between them, and they can split the work
+              Say what you want done in the bar below — press{" "}
+              <kbd className="identra-empty__kbd">{MOD_LABEL}</kbd> from
+              anywhere — and an orchestrator breaks the work up and wires the
+              agents it needs.
+            </p>
+            <p className="identra-empty__hint">
+              Or pick an agent from the dock to run one yourself. Drop in a
+              second and draw a wire between them, and they can split the work
               between themselves.
             </p>
           </div>
         ))}
 
-      <div className="identra-topbar">
-        {/* The mark, not a button: the anchor that says whose desktop this is. Going home is the
+      {/* One column at the top of the window, so the banner and the bar stack instead of landing on
+          top of each other. They used to be independently fixed at top 0 and top 12, and the banner
+          drew above: a workspace that could not save covered its own workspace menu, which is the
+          control you reach for to go somewhere writable. Whatever height the message wraps to, the
+          bar now begins under it. */}
+      <div className="identra-topstack">
+        {saveError !== null && (
+          // It stays until a save works. A canvas that is not on disk is not a thing to mention
+          // once and then hide: every drag from here is work that will not be there tomorrow, and
+          // the user is the only one who can do anything about a full disk or a folder they cannot
+          // write to.
+          <div className="identra-save-error" role="alert">
+            <strong>This workspace is not being saved.</strong> {saveError}
+          </div>
+        )}
+        <div className="identra-topbar">
+          {/* The mark, not a button: the anchor that says whose desktop this is. Going home is the
             workspace menu's job, one control to the right. */}
-        <img className="identra-logo identra-topbar__logo" src={logo} alt="" />
-        <WorkspaceMenu
-          workspace={workspace}
-          onOpen={(w) => void openWorkspace(w)}
-          onRenamed={setWorkspace}
-          onDeleted={() => {
-            // Back to the picker. The workspace under us is gone, so there is nothing to show and
-            // nothing to save into.
-            setWorkspace(null);
-            setNodes([]);
-            setEdges([]);
-            nodesRef.current = [];
-            edgesRef.current = [];
-          }}
-        />
-        <button
-          className="identra-topbar__btn"
-          data-on={panelOpen}
-          onClick={() => {
-            // One slide-over at a time: they share the same edge of the window.
-            setFilesOpen(false);
-            setPanelOpen((v) => !v);
-          }}
-          title="What your agents are working on"
-        >
-          Work
-          {/* The ambient signal that memory is accumulating: a count on the toggle, no toast
-              stream. It reads whether or not the panel is open. */}
-          {memoryCount > 0 && (
-            <span className="identra-topbar__badge">{memoryCount}</span>
-          )}
-        </button>
-        <button
-          className="identra-topbar__btn"
-          data-on={filesOpen}
-          onClick={() => {
-            setPanelOpen(false);
-            setFilesOpen((v) => !v);
-          }}
-          title="Browse and search this workspace's files"
-        >
-          Files
-        </button>
-        {/* One dev server per workspace: the button is the way to start it, so the button goes
-            while one is on the board. Stopping is closing the node, like everything else. */}
-        {devCmd !== null && !nodes.some((n) => n.data.kind === "dev") && (
+          <img
+            className="identra-logo identra-topbar__logo"
+            src={logo}
+            alt=""
+          />
+          <WorkspaceMenu
+            workspace={workspace}
+            onOpen={(w) => void openWorkspace(w)}
+            onRenamed={setWorkspace}
+            onDeleted={() => {
+              // Back to the picker. The workspace under us is gone, so there is nothing to show and
+              // nothing to save into.
+              setWorkspace(null);
+              setNodes([]);
+              setEdges([]);
+              nodesRef.current = [];
+              edgesRef.current = [];
+            }}
+          />
           <button
             className="identra-topbar__btn"
-            onClick={() => addNode("dev", "Dev server")}
-            title={`Start the dev server: ${devCmd.join(" ")}`}
+            data-on={panelOpen}
+            onClick={() => {
+              // One slide-over at a time: they share the same edge of the window.
+              setFilesOpen(false);
+              setPanelOpen((v) => !v);
+            }}
+            title="What your agents are working on"
           >
-            Run
+            Work
+            {/* The ambient signal that memory is accumulating: a count on the toggle, no toast
+              stream. It reads whether or not the panel is open. */}
+            {memoryCount > 0 && (
+              <span className="identra-topbar__badge">{memoryCount}</span>
+            )}
           </button>
-        )}
-        {/* Both are hidden on an empty canvas. There is nothing to tidy and nothing to map, and a
+          <button
+            className="identra-topbar__btn"
+            data-on={filesOpen}
+            onClick={() => {
+              setPanelOpen(false);
+              setFilesOpen((v) => !v);
+            }}
+            title="Browse and search this workspace's files"
+          >
+            Files
+          </button>
+          {/* One dev server per workspace: the button is the way to start it, so the button goes
+            while one is on the board. Stopping is closing the node, like everything else. */}
+          {devCmd !== null && !nodes.some((n) => n.data.kind === "dev") && (
+            <button
+              className="identra-topbar__btn"
+              onClick={() => addNode("dev", "Dev server")}
+              title={`Start the dev server: ${devCmd.join(" ")}`}
+            >
+              Run
+            </button>
+          )}
+          {/* Both are hidden on an empty canvas. There is nothing to tidy and nothing to map, and a
             row of controls that do nothing is how an empty state stops reading as a first run. */}
-        {nodes.length > 0 && (
-          <>
-            <button
-              className="identra-topbar__btn"
-              onClick={tidy}
-              title="Lay the nodes out on a grid. Moves them, nothing else."
-            >
-              Tidy
-            </button>
-            <button
-              className="identra-topbar__btn"
-              data-on={minimapOn}
-              onClick={() => setMinimapOn((v) => !v)}
-              title="Show a map of the whole canvas"
-            >
-              Map
-            </button>
-            <button
-              className="identra-topbar__btn"
-              onClick={() => void exportCanvas()}
-              title="Save this canvas to a file"
-            >
-              Export
-            </button>
-          </>
-        )}
-        {/* Import stays available on an empty canvas: bringing a board in is exactly what you want
+          {nodes.length > 0 && (
+            <>
+              <button
+                className="identra-topbar__btn"
+                onClick={tidy}
+                title="Lay the nodes out on a grid. Moves them, nothing else."
+              >
+                Tidy
+              </button>
+              <button
+                className="identra-topbar__btn"
+                data-on={minimapOn}
+                onClick={() => setMinimapOn((v) => !v)}
+                title="Show a map of the whole canvas"
+              >
+                Map
+              </button>
+              <button
+                className="identra-topbar__btn"
+                onClick={() => void exportCanvas()}
+                title="Save this canvas to a file"
+              >
+                Export
+              </button>
+            </>
+          )}
+          {/* Import stays available on an empty canvas: bringing a board in is exactly what you want
             to do with an empty one, and it is the only one of these that is useful with nothing
             on screen. */}
-        <button
-          className="identra-topbar__btn"
-          onClick={() => void importCanvas()}
-          title="Replace this canvas with one from a file"
-        >
-          Import
-        </button>
-        <button
-          className="identra-topbar__btn"
-          data-on={settingsOpen}
-          onClick={() => setSettingsOpen((v) => !v)}
-          title="Settings for this machine"
-        >
-          Settings
-        </button>
+          <button
+            className="identra-topbar__btn"
+            onClick={() => void importCanvas()}
+            title="Replace this canvas with one from a file"
+          >
+            Import
+          </button>
+          <button
+            className="identra-topbar__btn"
+            data-on={settingsOpen}
+            onClick={() => setSettingsOpen((v) => !v)}
+            title="Settings for this machine"
+          >
+            Settings
+          </button>
+        </div>
       </div>
 
       {panelOpen && (

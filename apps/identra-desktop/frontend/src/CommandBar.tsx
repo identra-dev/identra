@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
+// The shortcut label, in the idiom of the machine it is drawn on. Read once: it cannot change
+// while the app is open, and it is on screen at all times. Exported because the empty canvas names
+// the same key, and two places spelling a shortcut is how they come to disagree.
+export const MOD_LABEL = /Mac|iPhone|iPad/.test(navigator.userAgent)
+  ? "⌘K"
+  : "Ctrl K";
+
 // How the last instruction went. The bar is the one place where a user gives an instruction without
 // watching a terminal, so it has to answer for itself: silence after typing is indistinguishable
 // from a bar that is broken.
@@ -43,6 +50,31 @@ export default function CommandBar({
 }: Props) {
   const [text, setText] = useState("");
   const busy = state.kind === "sending";
+
+  // The whole product is "say what you want done", and until now the only way to say it was to
+  // find the box with a mouse. Every node on this canvas is a terminal that swallows keystrokes,
+  // so there is no tab-your-way-there either: without this the primary action is the one thing on
+  // screen the keyboard cannot reach.
+  //
+  // The listener lives here rather than in App because the bar owns the input it focuses, and it
+  // is mounted exactly when the shortcut should work: on a machine with no agent installed there
+  // is no bar and no seat to type at, and a shortcut that focuses nothing is worse than none.
+  const input = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== "k" || !(e.metaKey || e.ctrlKey) || e.altKey) return;
+      // Taken from the terminal too. xterm's hidden textarea has focus most of the time a node is
+      // open, and Ctrl+K there is kill-to-end-of-line. Capturing on window is what gets here first;
+      // stopping propagation is what actually keeps it, because xterm's own handler does not look
+      // at defaultPrevented and would send the byte to the pty regardless.
+      e.preventDefault();
+      e.stopPropagation();
+      input.current?.focus();
+      input.current?.select();
+    };
+    window.addEventListener("keydown", key, true);
+    return () => window.removeEventListener("keydown", key, true);
+  }, []);
 
   // Follow the tail as the agent writes, the way a terminal does, but stop following the moment the
   // user scrolls up: they are reading something, and yanking them back to the bottom every time a
@@ -106,9 +138,15 @@ export default function CommandBar({
           {seatName === null ? "Command center" : `Command center: ${seatName}`}
         </span>
         <input
+          ref={input}
           className="identra-cmd__input nodrag"
           value={text}
           onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            // Back to the canvas without sending. The same key inside a node belongs to the agent
+            // TUI, which is why only the bar's own input takes it.
+            if (e.key === "Escape") e.currentTarget.blur();
+          }}
           disabled={busy}
           placeholder={
             seatName === null
@@ -117,6 +155,11 @@ export default function CommandBar({
           }
           aria-label="Instruction for the orchestrator"
         />
+        {/* The shortcut, worn where it works. A key nobody is told about is a key nobody presses,
+            and this is the one that reaches the primary action from anywhere in the app. */}
+        <kbd className="identra-cmd__kbd" aria-hidden="true">
+          {MOD_LABEL}
+        </kbd>
         <button
           className="identra-cmd__send"
           type="submit"
