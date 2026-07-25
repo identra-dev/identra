@@ -117,6 +117,16 @@ fn walk(base: &Path, dir: &Path, needle: &str, depth: u32, hits: &mut Vec<Hit>, 
         }
         let path = entry.path();
         let Ok(meta) = entry.metadata() else { continue };
+        // `DirEntry::metadata` does not follow the link, but the `fs::read` below does. Without
+        // this a link named `notes.txt` pointing at `~/.ssh/id_rsa` comes back as a snippet of
+        // that file under a path that looks like it is inside the workspace, which is the same
+        // escape `read` and `list` already refuse. Skipping links also keeps every hit openable:
+        // `resolve` canonicalizes, so it would deny a row the search had just offered.
+        // ponytail: a link to something inside the workspace is skipped too, and its target is
+        // found under its real path anyway. Resolve per entry if that ever stops being true.
+        if meta.is_symlink() {
+            continue;
+        }
         let rel = path
             .strip_prefix(base)
             .map(|p| p.display().to_string())
@@ -216,6 +226,43 @@ mod tests {
             search(&ws, "  ", 10).is_empty(),
             "a blank query finds nothing"
         );
+
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    /// Search is the one path here that reads file bytes, so it is the one that can leak them. A
+    /// link is the way out: the walk sees a name inside the workspace, and the read at the end of
+    /// it follows the link wherever it goes. What must not happen is a snippet of a file the rest
+    /// of the module would refuse to open, wearing a path that reads as local.
+    #[cfg(unix)]
+    #[test]
+    fn search_does_not_follow_a_link_out_of_the_workspace() {
+        let base = std::env::temp_dir().join(format!("identra-link-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let ws = base.join("ws");
+        let outside = base.join("outside");
+        fs::create_dir_all(&ws).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("id_rsa"), "PRIVATE KEY sekrit\n").unwrap();
+        // The honest copy, so a passing test means "the link was skipped", not "nothing matched".
+        fs::write(ws.join("inside.txt"), "sekrit lives here too\n").unwrap();
+
+        // A link to a file out of the workspace, and one to a whole directory out of it.
+        std::os::unix::fs::symlink(outside.join("id_rsa"), ws.join("notes.txt")).unwrap();
+        std::os::unix::fs::symlink(&outside, ws.join("vendor")).unwrap();
+
+        let hits = search(&ws, "sekrit", 50);
+        assert_eq!(hits.len(), 1, "only the real in-workspace file: {hits:?}");
+        assert_eq!(hits[0].path, "inside.txt");
+
+        // The stronger claim: every hit search offers is one the viewer will actually open.
+        for hit in &hits {
+            assert!(
+                resolve(&ws, &hit.path).is_ok(),
+                "search offered {:?}, which resolve refuses",
+                hit.path
+            );
+        }
 
         fs::remove_dir_all(&base).unwrap();
     }
