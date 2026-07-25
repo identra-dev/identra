@@ -10,6 +10,7 @@ import {
   type FileEntry,
   type FileHit,
 } from "./api";
+import { useEscape } from "./useEscape";
 
 type Props = {
   onOpenFile: (rel: string, name: string) => void;
@@ -17,6 +18,7 @@ type Props = {
 };
 
 export default function FilesPanel({ onOpenFile, onClose }: Props) {
+  useEscape(onClose);
   // The directory being browsed, workspace-relative, "" for the root.
   const [dir, setDir] = useState("");
   const [entries, setEntries] = useState<FileEntry[]>([]);
