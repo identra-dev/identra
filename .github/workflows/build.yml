@@ -105,6 +105,19 @@ jobs:
       - name: Frontend deps
         working-directory: apps/identra-desktop/frontend
         run: bun install --frozen-lockfile
+      # The weights are 130MB and they do not change between runs, so they are cached on the model
+      # file's own name rather than re-fetched on every tag. fetch-model.sh skips whatever is
+      # already there, so a hit costs nothing and a miss is one download.
+      - name: Cache the embedding model
+        uses: actions/cache@v4
+        with:
+          path: apps/identra-desktop/src-tauri/resources/model
+          key: identra-model-bge-small-en-v15-v1
+      # Identra ships the model rather than fetching it on a user's first memory, so it has to be
+      # on disk before the bundler runs. Without this the bundle still builds and still works, it
+      # just downloads on first use, which is the thing shipping it is meant to stop.
+      - name: Embedding model
+        run: ./apps/identra-desktop/fetch-model.sh
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

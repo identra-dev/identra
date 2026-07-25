@@ -13,6 +13,7 @@ use identra_core::{detect, AgentInfo};
 use identra_mcp::server::Bus;
 use identra_memory::Memory;
 use serde::Serialize;
+use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
@@ -692,12 +693,32 @@ pub fn run() {
                     _ => false,
                 })
                 .build()?;
-            // Start fetching the embedding model now, in the background, rather than on the first
+            // Point the engine at the model this build shipped, before anything can ask for an
+            // embedder. A release bundle carries it, so recall works by meaning on first launch,
+            // offline, with nothing fetched: the download that used to land on a new user's very
+            // first memory is paid for once, at install time, by everyone.
+            //
+            // Missing is a normal answer, not a failure. `cargo tauri dev` has no bundled
+            // resources, so the var goes unset and identra-memory falls back to fetching into the
+            // OS cache the way it always did.
+            if let Ok(dir) = app
+                .path()
+                .resolve("resources/model", BaseDirectory::Resource)
+            {
+                if dir.is_dir() {
+                    // Safety: single-threaded, inside setup, before the window exists and before
+                    // model_start() spawns the thread that reads it. Nothing else is running yet.
+                    unsafe {
+                        std::env::set_var(identra_memory::local_embedder::MODEL_DIR_ENV, &dir);
+                    }
+                }
+            }
+            // Start loading the embedding model now, in the background, rather than on the first
             // memory call. It used to load lazily, which meant the very first `add_memory` of a
-            // session paid for a 130MB download inside an agent's turn, and the agent simply
-            // appeared to hang. Asking here means the wait happens while the user is still opening
-            // a workspace, and `memory_status` is what tells them it is happening. Returns
-            // immediately; it does nothing if the model is already cached or switched off.
+            // session paid for the whole load inside an agent's turn, and the agent simply appeared
+            // to hang. Asking here means it happens while the user is still opening a workspace,
+            // and `memory_status` is what tells them it is happening. Returns immediately; it does
+            // nothing if the model is already loaded or switched off.
             identra_mcp::server::model_start();
             // The sink emits each output chunk to the webview as it arrives.
             let handle: AppHandle = app.handle().clone();

@@ -19,8 +19,11 @@ use std::sync::Arc;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
+// Public because the shell has to name one thing in it: the env var it hands the bundled model's
+// path through. Everything else here is an implementation detail of `LocalEmbedder`, which is
+// re-exported below and is what callers actually construct.
 #[cfg(feature = "fastembed")]
-mod local_embedder;
+pub mod local_embedder;
 #[cfg(feature = "fastembed")]
 pub use local_embedder::LocalEmbedder;
 

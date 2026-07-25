@@ -38,7 +38,9 @@
       },
       "assetProtocol": {
         "enable": true,
-        "scope": ["$HOME/.local/share/identra/wallpapers/**"]
+        "scope": [
+          "$HOME/.local/share/identra/wallpapers/**"
+        ]
       }
     }
   },
@@ -52,6 +54,9 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
+    ],
+    "resources": [
+      "resources/model/*"
     ]
   },
   "plugins": {

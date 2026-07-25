@@ -4,3 +4,22 @@ Copyright 2026 Identra
 This product includes software developed for the Identra project.
 
 Licensed under the Apache License, Version 2.0. See the LICENSE file for the full text.
+
+--------------------------------------------------------------------------------
+
+Bundled model weights
+
+Identra's installable builds ship an embedding model so that recall works by meaning on
+first launch, offline. The weights are redistributed, not authored here:
+
+  BAAI/bge-small-en-v1.5
+  Copyright (c) 2023 Beijing Academy of Artificial Intelligence (BAAI)
+  Licensed under the MIT License.
+  https://huggingface.co/BAAI/bge-small-en-v1.5
+
+  The ONNX conversion Identra fetches is Xenova/bge-small-en-v1.5, the same artifact the
+  fastembed crate downloads at runtime when a build ships without the model:
+  https://huggingface.co/Xenova/bge-small-en-v1.5
+
+The weights are not in this repository. They are fetched at build time by
+apps/identra-desktop/fetch-model.sh and included in the bundle from there.

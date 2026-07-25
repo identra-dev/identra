@@ -9,8 +9,12 @@ default:
 dev:
     cd apps/identra-desktop && cargo tauri dev
 
-# build a release bundle (AppImage + .deb on linux)
-build:
+# fetch the embedding model into the bundle's resources (once; a release build ships it)
+fetch-model:
+    ./apps/identra-desktop/fetch-model.sh
+
+# build a release bundle (AppImage + .deb on linux), with the model in it
+build: fetch-model
     cd apps/identra-desktop && cargo tauri build
 
 # run the whole test suite

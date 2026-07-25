@@ -198,9 +198,11 @@ it to.
 
 - Canvas state: `.identra/canvas.json` inside each project (gitignored by default).
 - Memory: a local SQLite database. Nothing leaves your machine.
-- The embedding model: fetched once into your OS cache directory, under `identra/models`. This is
-  the only thing Identra downloads, it is the model itself, and your memories are never part of it.
-  `IDENTRA_EMBEDDINGS=off` turns it off.
+- The embedding model: inside the app. A release build ships it, so recall works by meaning the
+  first time you open Identra, with nothing fetched and nothing to wait for. Identra downloads
+  nothing at all, and your memories are never part of the model.
+  `IDENTRA_EMBEDDINGS=off` turns recall by meaning off entirely. (A build from source has no
+  bundled model and falls back to fetching one into your OS cache under `identra/models`, once.)
 - Secrets: none of Identra's business. Your agent keys stay in your agent's own config.
 
 ### What Identra writes into your project
@@ -236,7 +238,8 @@ Identra uses a `justfile` for everything. Run `just` to list them.
 | Task | What it does |
 |------|--------------|
 | `just dev` | Build and run with hot reload |
-| `just build` | Produce a release bundle (AppImage and .deb on Linux) |
+| `just build` | Produce a release bundle (AppImage and .deb on Linux), model included |
+| `just fetch-model` | Fetch the embedding model into the bundle's resources. `just build` does this for you |
 | `just test` | Run the Rust and web test suites |
 | `just fmt` | Format Rust and web code |
 | `just lint` | Clippy and the web linter, warnings fail |
@@ -257,9 +260,9 @@ cannot check or correct.
 
 Recall works on meaning, not on words. Ask "how do we handle auth" and you get the decision that
 was written down as "the API issues JWT bearer tokens", which share no word at all. That runs on a
-small model on your machine (about 130MB, fetched once the first time you use memory, then it works
-offline). If you would rather it never reach the network, set `IDENTRA_EMBEDDINGS=off` and recall
-falls back to matching words, which is worse but yours.
+small model on your machine, and the download you are reading about already includes it, so it
+works on first launch and it works on a train. If you would rather not run it at all, set
+`IDENTRA_EMBEDDINGS=off` and recall falls back to matching words, which is worse but yours.
 
 What it will not do is pretend. A search hands back the closest facts it has and says that is what
 they are, because the model's ranking is good but its scores cannot tell a real answer from a

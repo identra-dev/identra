@@ -3,3 +3,9 @@
 node_modules/
 dist/
 .env
+# The embedding model the bundler ships. 130MB of weights that are not ours and do not belong in
+# anyone's clone or in this history; `fetch-model.sh` puts them here before a release build. The
+# README in that directory stays: it is what the bundler's glob matches when the model is absent,
+# which is what lets `just dev` build without staging 130MB first.
+/src-tauri/resources/model/*
+!/src-tauri/resources/model/README.md
