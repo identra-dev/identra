@@ -9,7 +9,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -47,7 +47,10 @@ struct Terminal {
     buffer: Arc<Mutex<VecDeque<Output>>>,
     /// When this node last printed anything. Shared with the reader thread, which is what stamps it.
     last_output: Arc<Mutex<std::time::Instant>>,
-    exited: Arc<std::sync::atomic::AtomicBool>,
+    exited: Arc<AtomicBool>,
+    /// Is this still the terminal that owns its id. Cleared when a newer spawn takes the id over,
+    /// and read by the reader thread before every event it emits. See [`TerminalManager::start`].
+    current: Arc<AtomicBool>,
 }
 
 /// What a node is doing, as far as anything outside it can tell.
@@ -146,6 +149,13 @@ impl TerminalManager {
     /// `env` sets extra process env on top of the inherited environment (the builder does not clear
     /// it, so the CLI still finds the user's login). Identra uses it to hand each node its own bus
     /// bearer without the token ever passing through the frontend.
+    ///
+    /// The old terminal is superseded rather than plain-killed, and the difference is the whole
+    /// reason this does not go through [`kill`](Self::kill). Its reader thread is parked in
+    /// `read()` and only wakes on the EOF the kill causes, which is *after* the replacement is in
+    /// the map. It would then emit that id's exit, and the node the user just restarted would paint
+    /// itself dead a beat after coming up. Clearing `current` is what stops a thread outliving its
+    /// terminal from speaking for the one that took its place.
     // Every argument here is a distinct PTY spawn knob (command, args, cwd, env, size). Folding
     // them into a struct would add a type for two call sites without making either clearer.
     #[allow(clippy::too_many_arguments)]
@@ -159,7 +169,10 @@ impl TerminalManager {
         rows: u16,
         cols: u16,
     ) -> Result<(), Error> {
-        self.kill(&id)?; // idempotent restart
+        if let Some(old) = self.terminals.lock().unwrap().remove(&id) {
+            old.current.store(false, Ordering::SeqCst);
+            let _ = old.child.lock().unwrap().kill();
+        }
 
         let pty = NativePtySystem::default()
             .openpty(PtySize {
@@ -188,10 +201,11 @@ impl TerminalManager {
         let buffer = Arc::new(Mutex::new(VecDeque::new()));
         let seq = Arc::new(AtomicU64::new(0));
         let last_output = Arc::new(Mutex::new(std::time::Instant::now()));
-        let exited = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let exited = Arc::new(AtomicBool::new(false));
+        let current = Arc::new(AtomicBool::new(true));
         let (sink, buf, id_for_thread) = (self.sink.clone(), buffer.clone(), id.clone());
         let child_for_thread = child.clone();
-        let (seen, done) = (last_output.clone(), exited.clone());
+        let (seen, done, mine) = (last_output.clone(), exited.clone(), current.clone());
 
         thread::spawn(move || {
             let mut chunk = [0u8; 4096];
@@ -211,7 +225,12 @@ impl TerminalManager {
                             }
                         }
                         *seen.lock().unwrap() = std::time::Instant::now();
-                        (sink)(id_for_thread.clone(), Event::Output(out));
+                        // Still buffered either way: the buffer belongs to this terminal and dies
+                        // with it, while the sink is shared and would otherwise deliver a dead
+                        // terminal's drain into the node that replaced it.
+                        if mine.load(Ordering::SeqCst) {
+                            (sink)(id_for_thread.clone(), Event::Output(out));
+                        }
                     }
                 }
             }
@@ -225,7 +244,9 @@ impl TerminalManager {
                 .wait()
                 .ok()
                 .map(|status| status.exit_code());
-            (sink)(id_for_thread, Event::Exit { code });
+            if mine.load(Ordering::SeqCst) {
+                (sink)(id_for_thread, Event::Exit { code });
+            }
         });
 
         self.terminals.lock().unwrap().insert(
@@ -237,6 +258,7 @@ impl TerminalManager {
                 buffer,
                 last_output,
                 exited,
+                current,
             },
         );
         Ok(())
@@ -442,6 +464,72 @@ mod tests {
                 .unwrap_err(),
             "terminal not found"
         );
+    }
+
+    /// Restarting a node under an id that is already running. The old reader thread is parked in
+    /// `read()` and wakes only on the EOF the restart causes, which lands after the replacement is
+    /// registered, so an unguarded thread emits that id's exit and the node the user just restarted
+    /// paints itself dead. Nothing may arrive under this id after the restart except the new
+    /// terminal's own output.
+    #[test]
+    fn a_restarted_node_never_hears_its_predecessor_die() {
+        let (tx, rx) = mpsc::channel();
+        let mgr = TerminalManager::new(Arc::new(move |_id, event: Event| {
+            let _ = tx.send(event);
+        }));
+
+        // Holds the pty open with nothing to say, so the only thing it can ever emit is the exit
+        // the restart below provokes.
+        mgr.start(
+            "n".into(),
+            "sh",
+            &["-c".into(), "read x".into()],
+            None,
+            &[],
+            24,
+            80,
+        )
+        .expect("spawn the first child");
+
+        mgr.start(
+            "n".into(),
+            "sh",
+            &["-c".into(), "printf 'second\\n'; read x".into()],
+            None,
+            &[],
+            24,
+            80,
+        )
+        .expect("respawn under the same id");
+
+        // Long enough for the superseded thread to wake on EOF, reap, and try to speak.
+        let mut saw = Vec::new();
+        while let Ok(event) = rx.recv_timeout(Duration::from_millis(1200)) {
+            saw.push(event);
+        }
+        assert!(
+            !saw.iter().any(|e| matches!(e, Event::Exit { .. })),
+            "the replaced terminal must not report an exit under an id it no longer owns"
+        );
+        let printed: Vec<u8> = saw
+            .iter()
+            .filter_map(|e| match e {
+                Event::Output(out) => Some(out.data.clone()),
+                Event::Exit { .. } => None,
+            })
+            .flatten()
+            .collect();
+        assert!(
+            String::from_utf8_lossy(&printed).contains("second"),
+            "the live terminal still speaks for the id"
+        );
+        assert_eq!(
+            mgr.status("n"),
+            Some(Status::Running),
+            "the node that is actually there is running, not exited"
+        );
+
+        let _ = mgr.kill("n");
     }
 
     /// The heuristic is checked on its own below. This checks the wiring around it: a real child in
