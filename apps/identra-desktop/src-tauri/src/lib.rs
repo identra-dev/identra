@@ -142,6 +142,13 @@ fn terminal_start(
         state.mcp_port,
         &workspace,
     ));
+    // Read per launch rather than cached at startup, so flipping the setting takes effect on the
+    // next node the user drops instead of on the next time they restart the app. A settings change
+    // that needs a restart to mean anything is a settings change people stop trusting.
+    args.extend(identra_mcp::config::autonomy_args(
+        &kind,
+        identra_core::settings::load().autonomy,
+    ));
     let token = state.bus.issue_token(&id);
     let mut env = identra_mcp::config::launch_env(&kind, state.mcp_port, &token, &id, &workspace);
     // The child's PATH leads with the executable's own directory plus everything discovery

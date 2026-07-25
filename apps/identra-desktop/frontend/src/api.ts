@@ -236,11 +236,18 @@ export const fileRead = (path: string) =>
   invoke<FileView>("file_read", { path });
 
 // What is true of this machine, as opposed to of one workspace. Mirrors identra-core settings.rs.
+// How much an agent may do before it stops and asks. "workspace" lets it work freely inside the
+// folder you opened; "ask" leaves each CLI's own prompts alone.
+export type Autonomy = "workspace" | "ask";
+
 export type Settings = {
   // Recall by meaning: on fetches a local model once (about 130MB), off matches by words and
   // never touches the network. Read by the engine once per process, so a change lands at the
   // next launch.
   embeddings: boolean;
+  // Read per node launch rather than per process, so this one lands on the next agent dropped
+  // rather than at the next restart.
+  autonomy: Autonomy;
 };
 
 export const settingsGet = () => invoke<Settings>("settings_get");

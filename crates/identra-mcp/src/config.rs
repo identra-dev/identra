@@ -29,6 +29,8 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+use identra_core::settings::Autonomy;
+
 /// The MCP server name the agents see. Also the key in `.mcp.json` and the codex `-c` overrides.
 pub const BUS_NAME: &str = "identra-bus";
 
@@ -204,6 +206,44 @@ pub fn launch_args(kind: &str, port: u16, workspace: &Path) -> Vec<String> {
         // silently has no peers. This trusts one folder for one run, and writes no trust to disk.
         "gemini" => vec!["--skip-trust".into()],
         // opencode is wired entirely through $OPENCODE_CONFIG, see launch_env.
+        _ => Vec::new(),
+    }
+}
+
+/// The flags that say how much this agent may do before stopping to ask a human.
+///
+/// Separate from [`launch_args`] on purpose: that answers "how does this agent reach the bus", this
+/// answers "what may it do once it is there". They are different questions with different reasons
+/// to change, and one of them is a security posture.
+///
+/// [`Autonomy::Workspace`] means the same intent everywhere — work freely inside the folder the
+/// user opened, stay out of the rest of the machine — but the CLIs enforce that to genuinely
+/// different depths, and pretending otherwise in the code would be the dishonest part:
+///
+/// - **codex** has a real OS sandbox, so the intent lands whole: `workspace-write` confines every
+///   write to the workspace, and with that confinement in place `never` asking is safe rather than
+///   reckless. The sandbox is doing the work the prompt was doing.
+/// - **claude** and **gemini** have no sandbox to lean on, so they get the strongest setting that
+///   is still bounded: file edits stop asking, shell commands still do. That is a weaker promise
+///   than codex's and it is deliberately not `bypassPermissions`, which would handle the last
+///   prompt by handing over the whole machine. A prompt that guards `rm -rf ~` is not friction.
+/// - **opencode** takes its config from a file rather than flags, so it gets nothing here.
+///
+/// [`Autonomy::Ask`] returns nothing at all: each CLI keeps its own default, which is what someone
+/// who turned this off is asking for.
+pub fn autonomy_args(kind: &str, autonomy: Autonomy) -> Vec<String> {
+    if autonomy == Autonomy::Ask {
+        return Vec::new();
+    }
+    match kind {
+        "codex" => vec![
+            "-c".into(),
+            "approval_policy=\"never\"".into(),
+            "-c".into(),
+            "sandbox_mode=\"workspace-write\"".into(),
+        ],
+        "claude" => vec!["--permission-mode".into(), "acceptEdits".into()],
+        "gemini" => vec!["--approval-mode".into(), "auto_edit".into()],
         _ => Vec::new(),
     }
 }
@@ -548,6 +588,45 @@ mod tests {
                 "/tmp/ws/.identra/opencode.json".into()
             ))
         );
+    }
+
+    /// The posture, per agent, at the depth each one can actually enforce. Pinned because these are
+    /// the flags that decide what runs on someone's machine without them clicking anything, so a
+    /// change here should have to be deliberate enough to update a test.
+    #[test]
+    fn autonomy_asks_for_exactly_as_much_freedom_as_the_agent_can_bound() {
+        // Off means untouched: whatever each CLI does by default is what someone who turned this
+        // off is asking for, and adding flags anyway would be overriding their answer.
+        for kind in ["codex", "claude", "gemini", "opencode"] {
+            assert!(autonomy_args(kind, Autonomy::Ask).is_empty());
+        }
+
+        // Codex has a real sandbox, so it gets the whole intent: confined to the workspace, and
+        // because it is confined, not asking.
+        let codex = autonomy_args("codex", Autonomy::Workspace);
+        assert!(codex.contains(&"sandbox_mode=\"workspace-write\"".to_string()));
+        assert!(codex.contains(&"approval_policy=\"never\"".to_string()));
+
+        // Claude and gemini have no sandbox, so they stop asking about edits and keep asking about
+        // shell. The negative assertion is the point: the day someone "fixes" the last prompt by
+        // reaching for bypassPermissions, this fails and says why.
+        assert_eq!(
+            autonomy_args("claude", Autonomy::Workspace),
+            vec!["--permission-mode", "acceptEdits"]
+        );
+        assert!(
+            !autonomy_args("claude", Autonomy::Workspace)
+                .iter()
+                .any(|a| a.contains("bypass")),
+            "unsandboxed autonomy stops at edits; the shell prompt is a guard, not friction"
+        );
+        assert_eq!(
+            autonomy_args("gemini", Autonomy::Workspace),
+            vec!["--approval-mode", "auto_edit"]
+        );
+
+        // opencode is configured by file, so flags have nothing to say about it.
+        assert!(autonomy_args("opencode", Autonomy::Workspace).is_empty());
     }
 
     /// Two crates hold the same fact and only this one can see both, so this is where it is checked.
