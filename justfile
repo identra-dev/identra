@@ -28,6 +28,14 @@ test:
 recall-check:
     cargo run -p identra-memory --features fastembed --example recall_check
 
+# See agent discovery under the stripped PATH a Dock or Finder launch hands the app, which is the
+# case that shipped broken once: CLIs that resolve in a terminal were invisible to a bundled build.
+# The binary is built first and then run under the bare env, because cargo itself needs the PATH
+# this is taking away. Every installed agent should still print an absolute cmd.
+detect-check:
+    cargo build -p identra-core --example detect_probe
+    env -i HOME="$HOME" PATH=/usr/bin:/bin ./target/debug/examples/detect_probe
+
 # format rust and web
 fmt:
     cargo fmt --all
