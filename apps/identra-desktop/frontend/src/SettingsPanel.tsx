@@ -79,7 +79,9 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
                 }
               />
               <span>
-                <span className="identra-settings__name">Recall by meaning</span>
+                <span className="identra-settings__name">
+                  Recall by meaning
+                </span>
                 <span className="identra-settings__hint">
                   Uses a local model, fetched once (about 130MB). This is the
                   only thing Identra ever downloads. Off, recall matches on

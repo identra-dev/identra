@@ -15,13 +15,15 @@ test("every builtin id resolves to its own css and an unknown one falls back", (
   }
   // A canvas from a newer build can name a background this build has never heard of. It has to
   // open as the plain board, because a hole where the canvas should be is a broken app.
-  expect(backgroundCss({ kind: "yaru", value: "yaru-from-the-future" }, asUrl)).toBe(
-    BUILTINS[0]!.css,
-  );
+  expect(
+    backgroundCss({ kind: "yaru", value: "yaru-from-the-future" }, asUrl),
+  ).toBe(BUILTINS[0]!.css);
 });
 
 test("a color is itself and an image keeps a floor under it", () => {
-  expect(backgroundCss({ kind: "color", value: "#16161d" }, asUrl)).toBe("#16161d");
+  expect(backgroundCss({ kind: "color", value: "#16161d" }, asUrl)).toBe(
+    "#16161d",
+  );
   const css = backgroundCss({ kind: "image", value: "/lib/abc.png" }, asUrl);
   expect(css).toContain('url("asset:///lib/abc.png")');
   // The base color under the image is what a missing file degrades to.
@@ -40,6 +42,10 @@ test("only a user image needs the scrim, and only the plain board keeps grey dot
   expect(needsScrim({ kind: "color", value: "#16161d" })).toBe(false);
 
   expect(dotColor(DEFAULT_WALLPAPER)).toBe("#3a3a3a");
-  expect(dotColor({ kind: "yaru", value: "yaru-dusk" })).toBe("var(--wallpaper-dots)");
-  expect(dotColor({ kind: "image", value: "/lib/a.png" })).toBe("var(--wallpaper-dots)");
+  expect(dotColor({ kind: "yaru", value: "yaru-dusk" })).toBe(
+    "var(--wallpaper-dots)",
+  );
+  expect(dotColor({ kind: "image", value: "/lib/a.png" })).toBe(
+    "var(--wallpaper-dots)",
+  );
 });

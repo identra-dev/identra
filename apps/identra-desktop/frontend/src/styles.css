@@ -366,6 +366,25 @@ body {
 .identra-cmd__input:disabled {
   opacity: 0.6;
 }
+/* The shortcut chip, sitting in the row it operates on. Quiet enough to read as a label rather
+   than a control: there is nothing to click here, it is telling you the key. */
+.identra-cmd__kbd {
+  flex: none;
+  padding: 3px 7px;
+  border-radius: 6px;
+  border: 1px solid var(--panel-edge);
+  background: #242424;
+  color: #8a8a8a;
+  font-family: inherit;
+  font-size: 10px;
+  line-height: 1.4;
+  white-space: nowrap;
+  user-select: none;
+}
+/* Gone once you are typing: it has done its job, and the box needs the width more than the hint. */
+.identra-cmd__input:focus ~ .identra-cmd__kbd {
+  display: none;
+}
 .identra-cmd__send {
   flex: none;
   padding: 8px 14px;
@@ -515,6 +534,7 @@ body {
   top: 0;
   z-index: 2;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 14px;
   padding: 12px 20px;
@@ -588,10 +608,13 @@ body {
   font-size: 14px;
   text-align: center;
 }
+/* Cards find their own column count. A hard `repeat(3, 1fr)` squeezed three boards into a
+   half-width window until each preview was a smudge, which defeats the reason the preview is the
+   biggest thing on the card. 260px is where a board is still recognizable. */
 .identra-home__grid {
   list-style: none;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: 18px;
   max-width: 1080px;
   margin: 22px auto 0;
@@ -724,8 +747,23 @@ body {
 .identra-empty__hint {
   margin: 0;
   font-size: 13px;
-  line-height: 1.55;
+  line-height: 1.75;
   color: #8f8f8f;
+}
+.identra-empty__hint + .identra-empty__hint {
+  margin-top: 10px;
+}
+/* Inline in a sentence, so it needs to sit on the text baseline rather than stand off it like the
+   chip in the command bar does. */
+.identra-empty__kbd {
+  padding: 2px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--panel-edge);
+  background: #2c2c2c;
+  color: #cfcfcf;
+  font-family: inherit;
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 /* First run with no agent installed. Unlike the empty hint this has a button, so it takes pointer
@@ -801,15 +839,35 @@ body {
   filter: brightness(1.08);
 }
 
-/* Top left: which workspace, and the way into what the agents are doing. */
-.identra-topbar {
+/* The top edge of the window: the save banner, then the bar under it. A column rather than two
+   independently fixed things, so the bar is always below the banner however tall the message wraps.
+   The column itself is not clickable, only what is in it, or it would eat every drag that started
+   near the top of the canvas. */
+.identra-topstack {
   position: fixed;
-  top: 12px;
-  left: 12px;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 8;
   display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  pointer-events: none;
+}
+.identra-topstack > * {
+  pointer-events: auto;
+}
+
+/* Top left: which workspace, and the way into what the agents are doing. Wraps rather than running
+   off the edge: this is eight controls in a row and a half-width window is an ordinary thing to
+   have next to an editor. */
+.identra-topbar {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  z-index: 5;
+  margin: 12px;
+  max-width: calc(100vw - 24px);
 }
 .identra-topbar__btn {
   background: rgba(44, 44, 44, 0.86);
@@ -1152,10 +1210,46 @@ body {
 .identra-ws__actions button:hover {
   background: var(--header);
 }
+/* Hangs below the workspace control rather than sitting in the topbar's flow, because it renders
+   with the menu shut (a failed inline rename) and a block child there would push the whole row
+   apart. Above the menu, so an error raised while the dropdown is open is still the thing you read
+   first. */
 .identra-ws__error {
-  margin: 6px 8px 2px;
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 21;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: max-content;
+  max-width: min(420px, calc(100vw - 40px));
+  margin: 0;
+  padding: 7px 8px 7px 10px;
+  border-radius: 7px;
+  background: var(--panel);
+  border: 1px solid #7a2b26;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
   font-size: 11px;
+  line-height: 1.45;
   color: #f66151;
+  overflow-wrap: anywhere;
+}
+.identra-ws__error-close {
+  flex: none;
+  margin-left: auto;
+  background: none;
+  border: 0;
+  padding: 0 2px;
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.75;
+}
+.identra-ws__error-close:hover {
+  opacity: 1;
 }
 
 /* A working node breathes in its own agent's colour.
@@ -1290,19 +1384,17 @@ body {
   color: var(--text);
 }
 
-/* The canvas is not reaching the disk. It sits above everything and does not go away on its own,
-   because every edit made past this point is work the user is going to lose. */
+/* The canvas is not reaching the disk. It spans the window and does not go away on its own, because
+   every edit made past this point is work the user is going to lose. Position comes from the top
+   stack it sits in, which is what keeps it off the workspace controls underneath. */
 .identra-save-error {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 10;
+  align-self: stretch;
   padding: 8px 14px;
   background: #c01c28;
   color: var(--text);
   font-size: 13px;
   line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
 /* The wallpaper popover. Above the topbar and dock (both z 6) because it opens from a click that
@@ -1550,7 +1642,11 @@ body {
 }
 .identra-file__text {
   margin: 0;
-  font-family: Ubuntu Mono, Menlo, Consolas, monospace;
+  font-family:
+    Ubuntu Mono,
+    Menlo,
+    Consolas,
+    monospace;
   font-size: 12px;
   line-height: 1.5;
   white-space: pre-wrap;
@@ -1605,7 +1701,11 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: Ubuntu Mono, Menlo, Consolas, monospace;
+  font-family:
+    Ubuntu Mono,
+    Menlo,
+    Consolas,
+    monospace;
   font-size: 11px;
   color: #9a9a9a;
 }

@@ -63,7 +63,6 @@ export default function WorkPanel({
     Math.floor(Date.now() / 1000),
   );
 
-
   const refresh = useCallback(async () => {
     try {
       const [t, m, s] = await Promise.all([

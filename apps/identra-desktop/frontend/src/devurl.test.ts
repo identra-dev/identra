@@ -4,16 +4,18 @@ import { appendTail, findLocalUrl } from "./devurl";
 test("real banner shapes give up their url", () => {
   // vite, colors and all
   expect(
-    findLocalUrl("  \x1b[32m➜\x1b[39m  Local:   \x1b[36mhttp://localhost:5173/\x1b[39m"),
+    findLocalUrl(
+      "  \x1b[32m➜\x1b[39m  Local:   \x1b[36mhttp://localhost:5173/\x1b[39m",
+    ),
   ).toBe("http://localhost:5173");
   // next
   expect(findLocalUrl("   - Local:        http://localhost:3000")).toBe(
     "http://localhost:3000",
   );
   // a plain server on the loopback ip, mid-sentence
-  expect(findLocalUrl("Serving at http://127.0.0.1:8000, press q to quit")).toBe(
-    "http://127.0.0.1:8000",
-  );
+  expect(
+    findLocalUrl("Serving at http://127.0.0.1:8000, press q to quit"),
+  ).toBe("http://127.0.0.1:8000");
   // a path survives, the trailing punctuation does not
   expect(findLocalUrl("open http://localhost:4321/docs/.")).toBe(
     "http://localhost:4321/docs",

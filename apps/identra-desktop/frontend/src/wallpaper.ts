@@ -53,9 +53,7 @@ export function backgroundCss(
     case "yaru":
       // An id this build does not know renders as the default rather than a hole. That is what
       // lets a canvas exported from a newer Identra still open here.
-      return (
-        BUILTINS.find((b) => b.id === w.value)?.css ?? BUILTINS[0]!.css
-      );
+      return BUILTINS.find((b) => b.id === w.value)?.css ?? BUILTINS[0]!.css;
     case "color":
       return w.value;
     case "image":

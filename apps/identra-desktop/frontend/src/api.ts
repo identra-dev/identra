@@ -150,8 +150,6 @@ export const terminalStatus = (id: string) =>
 export const terminalKill = (id: string) =>
   invoke<void>("terminal_kill", { id });
 
-export const canvasLoad = () => invoke<Canvas>("canvas_load");
-
 export const canvasSave = (canvas: Canvas) =>
   invoke<void>("canvas_save", { canvas });
 
@@ -227,8 +225,7 @@ export const filesList = (rel: string) =>
 export const filesSearch = (query: string) =>
   invoke<FileHit[]>("files_search", { query });
 
-export const fileReveal = (rel: string) =>
-  invoke<void>("file_reveal", { rel });
+export const fileReveal = (rel: string) => invoke<void>("file_reveal", { rel });
 
 // What the file viewer renders, mirroring identra-core fileview.rs. Image bytes arrive as a
 // plain array and become a blob URL on this side, which keeps base64 out of both.
