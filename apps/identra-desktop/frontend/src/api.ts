@@ -15,6 +15,10 @@ export type AgentInfo = {
   // orchestrator seat is chosen on, because an agent that cannot spawn a helper, wire it, or reach
   // the board cannot orchestrate anything.
   bus_wired: boolean;
+  // Whether this CLI shows its agent the instructions the bus returns at initialize, which is how
+  // an agent arrives already knowing the project. Ranked on when picking the orchestrator seat,
+  // because that is the one node that has to understand the project before it can split work up.
+  reads_connect_instructions: boolean;
 };
 
 export type CanvasNode = {

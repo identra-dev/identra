@@ -34,6 +34,22 @@ pub struct AgentInfo {
     /// the two agree, because a row here claiming a wiring that does not exist would put a helpless
     /// agent in the seat.
     pub bus_wired: bool,
+    /// Whether this CLI shows its agent the `instructions` field an MCP server returns at
+    /// `initialize`.
+    ///
+    /// `identra-mcp` calls that field the whole wedge, and it is: it is how an agent arrives
+    /// already knowing what the project has learned, with no tool call and no prompting. A client
+    /// that ignores it still gets every bus tool, so it can be a helper perfectly well. It just
+    /// starts blind, and it never reads the connect-time brief telling it how to work here.
+    ///
+    /// Which is exactly the wrong property for the seat. The orchestrator is the one node the user
+    /// types at and the one that has to know the project before it can split the work up, so this
+    /// ranks above being first in the registry.
+    ///
+    /// True only where it has been observed. Assuming it of a client that does not do it puts an
+    /// orchestrator in the seat that silently never read its brief, which is a failure with no
+    /// symptom, so the default here is the cautious one.
+    pub reads_connect_instructions: bool,
 }
 
 /// One agent the dock can offer. A row of facts, no code branch: the per-CLI quirks (extra
@@ -58,6 +74,9 @@ struct Adapter {
     mac_config_dirs: &'static [&'static str],
     /// Identra knows how to hand this agent the bus at launch. See [`AgentInfo::bus_wired`].
     bus_wired: bool,
+    /// This CLI surfaces an MCP server's `initialize` instructions to its agent.
+    /// See [`AgentInfo::reads_connect_instructions`].
+    reads_connect_instructions: bool,
 }
 
 /// Claude Code's API-key env var, assembled from two pieces so the vendor brand never appears as a
@@ -77,6 +96,7 @@ const KNOWN: &[Adapter] = &[
         auth_paths: &[".codex/auth.json"],
         auth_envs: &["OPENAI_API_KEY", "CODEX_API_KEY"],
         bus_wired: true,
+        reads_connect_instructions: false,
         mac_config_dirs: &[".codex"],
     },
     Adapter {
@@ -88,6 +108,9 @@ const KNOWN: &[Adapter] = &[
         auth_paths: &[".claude/.credentials.json"],
         auth_envs: &[CLAUDE_API_KEY_ENV],
         bus_wired: true,
+        // Observed: it shows the agent the server's initialize instructions, so a node here
+        // opens already knowing the project. This is what puts it in the seat.
+        reads_connect_instructions: true,
         mac_config_dirs: &[".claude"],
     },
     Adapter {
@@ -98,6 +121,7 @@ const KNOWN: &[Adapter] = &[
         auth_paths: &[".gemini/oauth_creds.json"],
         auth_envs: &["GEMINI_API_KEY", "GOOGLE_API_KEY"],
         bus_wired: true,
+        reads_connect_instructions: false,
         mac_config_dirs: &[],
     },
     Adapter {
@@ -108,6 +132,7 @@ const KNOWN: &[Adapter] = &[
         auth_paths: &[".local/share/opencode/auth.json"],
         auth_envs: &["OPENAI_API_KEY", CLAUDE_API_KEY_ENV],
         bus_wired: true,
+        reads_connect_instructions: false,
         mac_config_dirs: &[],
     },
     // Not installed on this box; here so the dock shows them as missing and they light up on
@@ -120,6 +145,7 @@ const KNOWN: &[Adapter] = &[
         auth_paths: &[],
         auth_envs: &["OPENAI_API_KEY", CLAUDE_API_KEY_ENV],
         bus_wired: false,
+        reads_connect_instructions: false,
         mac_config_dirs: &[],
     },
     Adapter {
@@ -131,6 +157,7 @@ const KNOWN: &[Adapter] = &[
         auth_paths: &[".config/goose/config.yaml"],
         auth_envs: &["GOOSE_PROVIDER"],
         bus_wired: false,
+        reads_connect_instructions: false,
         mac_config_dirs: &[".config/goose"],
     },
     Adapter {
@@ -141,6 +168,7 @@ const KNOWN: &[Adapter] = &[
         auth_paths: &[".config/amp/settings.json"],
         auth_envs: &["AMP_API_KEY"],
         bus_wired: false,
+        reads_connect_instructions: false,
         mac_config_dirs: &[],
     },
     Adapter {
@@ -151,6 +179,7 @@ const KNOWN: &[Adapter] = &[
         auth_paths: &[".cursor/cli-config.json"],
         auth_envs: &[],
         bus_wired: false,
+        reads_connect_instructions: false,
         mac_config_dirs: &[],
     },
 ];
@@ -179,29 +208,43 @@ fn row_to_info(a: &Adapter) -> AgentInfo {
         cmd,
         args: a.args.iter().map(|s| (*s).to_string()).collect(),
         bus_wired: a.bus_wired,
+        reads_connect_instructions: a.reads_connect_instructions,
     }
 }
 
 /// The agent to put in the orchestrator seat by default, or `None` when nothing here can hold it.
 ///
 /// The seat has to be a role rather than a brand, so this ranks on what an agent can actually do
-/// here and never on which one it is. Two capabilities decide it, in this order:
+/// here and never on which one it is. Three capabilities decide it, in this order:
 ///
 /// 1. **It is wired to the bus.** An orchestrator that cannot spawn a helper, wire it, or put work
 ///    on the board is not an orchestrator, it is a chat window. This is the one hard requirement.
 /// 2. **It looks signed in.** Between two wired agents, the one with credentials will get further
-///    than the one that will stop at a login prompt on its first instruction.
+///    than the one that will stop at a login prompt on its first instruction. This outranks what
+///    follows, because an agent that cannot start cannot benefit from knowing anything.
+/// 3. **It reads the connect instructions.** See [`AgentInfo::reads_connect_instructions`]. The
+///    seat is the node that has to understand the project before it can break work up, and a
+///    client that drops the `initialize` instructions never receives either the project's memory
+///    or the brief telling it how to orchestrate here. It runs, it just runs uninformed, and
+///    because that failure is silent it is the one worth ranking on rather than debugging later.
 ///
 /// Ties fall back to the order of the registry above, which is a curation rather than a ranking:
 /// somebody has to be first, and the user reassigns the seat whenever they disagree. No vendor is
-/// named in this function, and none should ever be.
+/// named in this function, and none should ever be: which agent wins today is a consequence of the
+/// capability flags on its row, and it changes on its own the day another client starts surfacing
+/// what the server sends it.
 pub fn best_orchestrator(agents: &[AgentInfo]) -> Option<&AgentInfo> {
     // min_by_key rather than max, because it keeps the first of equal keys and max keeps the last.
     // Registry order is the documented tiebreak, so the ranking has to be inverted to preserve it.
     agents
         .iter()
         .filter(|a| a.available && a.bus_wired)
-        .min_by_key(|a| u8::from(!a.logged_in))
+        .min_by_key(|a| {
+            (
+                u8::from(!a.logged_in),
+                u8::from(!a.reads_connect_instructions),
+            )
+        })
 }
 
 /// True if any auth env is set and non-empty, or any HOME-relative auth path exists and is
@@ -471,6 +514,15 @@ mod tests {
             cmd: id.into(),
             args: Vec::new(),
             bus_wired,
+            reads_connect_instructions: false,
+        }
+    }
+
+    /// The same fixture for the rows that also read what the server sends them at connect.
+    fn reader(id: &str, logged_in: bool) -> AgentInfo {
+        AgentInfo {
+            reads_connect_instructions: true,
+            ..agent(id, true, logged_in, true)
         }
     }
 
@@ -497,7 +549,7 @@ mod tests {
             Some("wired-signed-out")
         );
 
-        // Equal on both capabilities, so registry order decides and the first one wins. max_by_key
+        // Equal on every capability, so registry order decides and the first one wins. max_by_key
         // would quietly hand this to the last, which is why the ranking is inverted in there.
         let list = vec![
             agent("earlier", true, true, true),
@@ -506,6 +558,31 @@ mod tests {
         assert_eq!(
             best_orchestrator(&list).map(|a| a.id.as_str()),
             Some("earlier")
+        );
+
+        // Both signed in and wired, so the one that will actually read the project's memory and its
+        // brief at connect takes the seat, even though the other is listed first. This is the rule
+        // that moves the real seat off the first row of the registry, and it is the reason the
+        // orchestrator arrives knowing the project instead of asking what it is looking at.
+        let list = vec![
+            agent("earlier-but-deaf", true, true, true),
+            reader("later-but-reads-its-brief", true),
+        ];
+        assert_eq!(
+            best_orchestrator(&list).map(|a| a.id.as_str()),
+            Some("later-but-reads-its-brief")
+        );
+
+        // Signed in still outranks it, because an agent that stops at a login prompt cannot use
+        // anything it was told. A reader with no credentials does not get the seat over a working
+        // one that merely starts uninformed.
+        let list = vec![
+            agent("signed-in-deaf", true, true, true),
+            reader("signed-out-reader", false),
+        ];
+        assert_eq!(
+            best_orchestrator(&list).map(|a| a.id.as_str()),
+            Some("signed-in-deaf")
         );
 
         // Nothing installed, or nothing wired, means there is no seat to offer. The caller has to
