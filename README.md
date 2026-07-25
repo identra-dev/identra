@@ -108,6 +108,18 @@ The look is Ubuntu/Yaru, because I stare at this thing all day and I wanted it t
 part of my desktop, not a browser tab pretending to be an app. The wallpaper is yours to set,
 per workspace.
 
+### How much agents do without asking
+
+An approval prompt is reasonable once and unusable four times at once, which is what a canvas of
+parallel agents turns it into. So agents work inside the workspace folder without stopping to ask,
+and Settings has a switch to put every prompt back.
+
+The CLIs enforce that to different depths and it is worth knowing which you are running. Codex has
+a real sandbox, so it is confined to the folder and asks for nothing inside it. Claude and Gemini
+have no sandbox to lean on, so they stop asking about file edits and **still ask before running
+shell commands** — that last prompt is a guard on an unsandboxed home directory, not friction, and
+Identra will not remove it for you.
+
 ## Requirements
 
 **To run a release build:** `codex` on your PATH, and nothing else. Linux or macOS.
@@ -195,6 +207,32 @@ it to.
   the only thing Identra downloads, it is the model itself, and your memories are never part of it.
   `IDENTRA_EMBEDDINGS=off` turns it off.
 - Secrets: none of Identra's business. Your agent keys stay in your agent's own config.
+
+### What Identra writes into your project
+
+Opening a folder as a workspace writes a small number of files into it, and it is your repository,
+so here is the whole list rather than a promise that it is tidy.
+
+| Path | What it is | Yours already? |
+|------|-----------|----------------|
+| `.identra/canvas.json` | Node layout, wallpaper, the seat | No, Identra's |
+| `.identra/memory.db` | What the project has learned, plus `-wal` and `-shm` sidecars while it is open | No, Identra's |
+| `.identra/bus.db` | The task board and the message queue, same two sidecars | No, Identra's |
+| `.identra/opencode.json` | Bus config, kept out of the project root because opencode is pointed at it by env | No, Identra's |
+| `.identra/revealed` | Marker that the memory panel has introduced itself once | No, Identra's |
+| `.mcp.json` | Claude's project MCP config | **Often yours** |
+| `.gemini/settings.json` | Gemini's project settings | **Often yours** |
+| `AGENTS.md`, `CLAUDE.md` | The workspace guide agents read on start | Possibly yours |
+
+The last three rows are the ones worth knowing about. `.mcp.json` and `.gemini/settings.json` are
+files a multi-CLI developer usually already owns, so Identra **merges** into them: it inserts or
+replaces its own `identra-bus` key under `mcpServers` and writes everything else back untouched. If
+one of them is not valid JSON, it is moved aside to `.bak` rather than discarded, and a fresh one is
+written. Re-opening the folder is a fixed point: nothing grows and nothing churns.
+
+The `-wal` and `-shm` files next to the databases are SQLite's, and they appear because Identra runs
+in WAL mode so the panel can read the board while an agent writes to it. They come and go on their
+own. Adding `.identra/` to your `.gitignore` covers all of them.
 
 ## Tasks
 
