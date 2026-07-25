@@ -171,10 +171,13 @@ impl Store {
         // WAL plus a busy timeout, set at the one gate every caller passes through. This file is
         // opened per call from several places at once: an agent writing a fact over the bus, the
         // work panel polling every two seconds, and a fresh agent reading the recent facts at
-        // connect. Under the default rollback journal a read and a write collide as "database is
-        // locked", and that likelihood peaks during a demo or a watched first run. WAL lets readers
-        // run alongside one writer; the timeout makes a second writer wait its turn rather than
-        // fail. On an in-memory store WAL is a no-op, which is fine: nothing shares that handle.
+        // connect. What the default rollback journal costs is concurrency rather than correctness,
+        // since rusqlite already defaults the busy timeout to five seconds and a second writer
+        // waits rather than erroring. WAL is what lets the poll read while an agent writes instead
+        // of the two taking turns, and it matters most when the canvas is busiest. The timeout is
+        // pinned here rather than inherited so the guarantee belongs to this function instead of to
+        // a dependency's default, which can change under us without the build saying anything.
+        // On an in-memory store WAL is a no-op, which is fine: nothing shares that handle.
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;")?;
         conn.execute_batch(SCHEMA)?;
         Ok(Store {
@@ -704,9 +707,9 @@ mod tests {
         assert_eq!(hits[0].content, "claude fact");
     }
 
-    /// A file store opens in WAL with a busy timeout, so the panel poll and an agent's write do not
-    /// collide as "database is locked". Pinning the pragmas here catches a regression that would
-    /// otherwise only show under concurrent load, which is exactly when it would be worst.
+    /// A file store opens in WAL with a busy timeout, so the panel poll and an agent's write run
+    /// alongside each other instead of taking turns. Pinning the pragmas here catches a regression
+    /// that would otherwise only show as a slow canvas under load, which is where nobody looks.
     #[test]
     fn a_file_store_opens_in_wal_with_a_busy_timeout() {
         let dir = std::env::temp_dir().join(format!("identra-wal-{}", std::process::id()));
@@ -729,8 +732,8 @@ mod tests {
     }
 
     /// The real thing the pragmas buy: a reader on one connection keeps working while a writer on
-    /// another hammers the same file. Under the default journal this is where the lock error shows
-    /// up; every `recent` call here would panic on it. With WAL and the timeout, none do.
+    /// another hammers the same file. Two hundred rounds of it, because the failure this guards
+    /// against is intermittent by nature, and one round of each would pass either way.
     #[test]
     fn a_reader_is_not_locked_out_while_a_writer_works() {
         use std::sync::{Arc, Barrier};

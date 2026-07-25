@@ -33,12 +33,25 @@ pub fn bus_db_path(project_dir: &Path) -> PathBuf {
 }
 
 /// Open the workspace's bus database, creating `.identra/` on first use.
+///
+/// WAL, for the same reason the fact store next to it runs in WAL, and set here because this is
+/// the one gate both the board and the inbox open through. Nothing fails without it: rusqlite
+/// already defaults the busy timeout to five seconds, so a second writer waits rather than
+/// erroring. What the default rollback journal costs is concurrency, and the board is where that
+/// shows: the work panel reads it every two seconds while agents claim and complete on it, and
+/// under a rollback journal those take turns. WAL lets the poll read while a claim writes.
+///
+/// The timeout is pinned rather than inherited so the guarantee belongs to this function instead
+/// of to a dependency's default, which can change under us without the build saying anything.
 pub fn open_bus_db(project_dir: &Path) -> Result<rusqlite::Connection, String> {
     let path = bus_db_path(project_dir);
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
-    rusqlite::Connection::open(path).map_err(|e| e.to_string())
+    let conn = rusqlite::Connection::open(path).map_err(|e| e.to_string())?;
+    conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;")
+        .map_err(|e| e.to_string())?;
+    Ok(conn)
 }
 
 /// Peer transcript tail is capped here. Enough to hand over what a peer just did without
@@ -198,5 +211,30 @@ mod tests {
             get_peer_context("a", "b", &wired, &io),
             Err(BusError::NoPeer)
         );
+    }
+
+    /// The board and the inbox both open through `open_bus_db`, so the pragmas are pinned once
+    /// here rather than in each of them. The busy timeout is asserted even though rusqlite already
+    /// defaults to it: the point of setting it is that this function owns the value, and a test
+    /// that only checked WAL would not notice the day that default moved.
+    #[test]
+    fn the_bus_db_opens_in_wal_with_a_busy_timeout() {
+        let dir = std::env::temp_dir().join(format!("identra-busdb-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let conn = open_bus_db(&dir).unwrap();
+
+        let mode: String = conn
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(mode.to_lowercase(), "wal");
+        let timeout: i64 = conn
+            .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
+            .unwrap();
+        assert!(timeout >= 5000, "the busy timeout is set, got {timeout}");
+
+        // Opening it created the directory it lives in, which is the other half of this function.
+        assert!(bus_db_path(&dir).exists());
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
