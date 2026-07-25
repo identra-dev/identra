@@ -179,7 +179,15 @@ export type Memory = {
   id: number;
   content: string;
   created_at: number;
+  // The node that recorded it. The engine has always sent this; the panel used to throw it away,
+  // which left every fact looking like it came from nowhere.
+  run_id: string;
 };
+
+// Forget one fact. Resolves true when a row went, false when there was nothing under that id —
+// which the panel treats the same way, because either way the fact the user wanted gone is gone.
+export const memoryForget = (id: number) =>
+  invoke<boolean>("memory_forget", { id });
 
 export const boardList = () => invoke<Task[]>("board_list");
 
