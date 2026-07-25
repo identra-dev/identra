@@ -89,6 +89,10 @@ const nodeTypes = {
 // Long enough that a drag is one write rather than sixty, short enough that the window I have to
 // flush on close stays small.
 const SAVE_DEBOUNCE_MS = 400;
+// The longest the window waits for its final save before closing anyway. Long enough that an
+// ordinary write to a local file finishes inside it many times over, short enough that a user who
+// clicked close is not left wondering whether the click registered.
+const CLOSE_FLUSH_MAX_MS = 2000;
 // How often the command bar re-reads the board and the seat's state. Slow enough to be free, fast
 // enough that "it is asking you something" does not sit unnoticed. Only runs while a seat exists.
 const SEAT_POLL_MS = 2500;
@@ -469,19 +473,27 @@ export default function App() {
   useEffect(() => {
     const win = getCurrentWindow();
     const pending = win.onCloseRequested(async (event) => {
+      // Asked twice. The first request is still flushing, and the honest reading of a second click
+      // is "I want out now", so it goes now. This used to preventDefault and return, which was fine
+      // exactly as long as the first request always reached its destroy. When it did not, the flag
+      // stayed latched and every close from then on was refused: the window could not be shut at
+      // all and the only way out was killing the process.
       if (closing.current) {
-        // The first request is mid-save and will destroy the window itself.
-        event.preventDefault();
+        void win.destroy();
         return;
       }
       if (!unsaved.current) return;
       event.preventDefault();
       closing.current = true;
-      try {
-        await saveNow();
-      } finally {
-        void win.destroy();
-      }
+      // Bounded, and that bound is the point. `canvas_save` crosses IPC into the engine, and an
+      // engine that is wedged must not take the window with it: flushing on close exists to save
+      // the user's layout, not to make quitting conditional on a write succeeding. Whatever
+      // happens in the next couple of seconds, the window goes.
+      await Promise.race([
+        saveNow().catch(() => {}),
+        new Promise((resolve) => setTimeout(resolve, CLOSE_FLUSH_MAX_MS)),
+      ]);
+      void win.destroy();
     });
     return () => {
       void pending.then((unlisten) => unlisten());

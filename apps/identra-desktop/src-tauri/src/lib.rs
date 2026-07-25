@@ -814,6 +814,26 @@ pub fn run() {
             workspace_open_recent,
             workspace_forget_recent
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Identra");
+        .build(tauri::generate_context!())
+        .expect("error while building Identra")
+        // Take the agents down with the app.
+        //
+        // Every node is a real CLI in a real PTY, and a child process does not die because its
+        // parent did. Closing the window left a codex or a claude per node still running, holding
+        // its model session and its share of the machine, invisible now that the canvas they
+        // belonged to was gone: the user's only sign of them was a process list. Worse on the way
+        // out than it sounds, because the reader threads die with the process, so nothing was even
+        // watching them any more.
+        //
+        // Exit rather than ExitRequested: this is the last point where the state is still there to
+        // read, and killing at the request would take the agents down before a window that has not
+        // finished flushing its canvas is done with them.
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                let state = app.state::<AppState>();
+                for id in state.manager.ids() {
+                    let _ = state.manager.kill(&id);
+                }
+            }
+        });
 }
