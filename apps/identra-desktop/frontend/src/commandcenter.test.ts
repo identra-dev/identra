@@ -4,8 +4,6 @@ import {
   composeDispatch,
   summarizePlan,
   planLine,
-  readableTranscript,
-  TRANSCRIPT_MAX,
 } from "./commandcenter";
 import type { Task } from "./api";
 
@@ -45,34 +43,6 @@ test("the bar talks to the seat that exists, and stands one up when it does not"
   expect(planSeat(null, false, null)).toEqual({ kind: "unavailable" });
   // Even with nothing installable, a live seat still works: it is already running.
   expect(planSeat("n1", true, null)).toEqual({ kind: "use", nodeId: "n1" });
-});
-
-test("the transcript keeps the words and drops the screen painting", () => {
-  // Colour and cursor moves are how a CLI draws; none of it is the conversation.
-  expect(readableTranscript("\x1b[31mred\x1b[0m and \x1b[1mbold\x1b[0m")).toBe(
-    "red and bold",
-  );
-  // A window title (OSC, ended by BEL) is addressed to the terminal, not the reader.
-  expect(readableTranscript("\x1b]0;codex\x07working")).toBe("working");
-  expect(readableTranscript("\x1b(Bplain")).toBe("plain");
-
-  // The spinner case, which is why carriage returns are emulated rather than stripped: each CR
-  // rewrites the line, so only the last state was ever on screen. Stripping them instead would
-  // show every frame of every spinner as separate text.
-  expect(readableTranscript("thinking.\rthinking..\rthinking...")).toBe(
-    "thinking...",
-  );
-  // Rewrites are per line: an earlier line keeps its own final state.
-  expect(readableTranscript("a1\ra2\nb1\rb2")).toBe("a2\nb2");
-
-  // A repaint leaves runs of blank lines behind. Two survive as a paragraph break; more is noise.
-  expect(readableTranscript("one\n\n\n\n\ntwo")).toBe("one\n\ntwo");
-
-  // The pane keeps the tail, because the tail is what someone is reading. The head is what they
-  // already scrolled past, and keeping all of it would grow without bound for a long session.
-  const long = readableTranscript("x".repeat(TRANSCRIPT_MAX + 500) + "END");
-  expect(long.length).toBe(TRANSCRIPT_MAX);
-  expect(long.endsWith("END")).toBe(true);
 });
 
 test("the brief rides in front of the first instruction and never again", () => {

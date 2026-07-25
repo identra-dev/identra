@@ -251,10 +251,11 @@ body {
   background: rgba(44, 44, 44, 0.92);
   border: 1px solid var(--panel-edge);
   border-radius: 10px;
-  /* Clear of the command bar, which sits at 110px and grows upward as it gains a plan line and a
-     status line. On a narrow window the bar runs the full width, so stacking above it is the only
-     placement that does not overlap at some size. */
-  bottom: 210px;
+  /* Clear of the command bar, which sits at 110px and grows upward: the orchestrator's terminal is
+     260px of that, plus the input row and whatever status lines it is carrying. On a narrow window
+     the bar runs the full width, so stacking above it is the only placement that does not overlap
+     at some size. */
+  bottom: 480px;
 }
 
 /* The command center bar, sitting directly above the dock and sharing its shape so the two read as
@@ -319,22 +320,21 @@ body {
 .identra-panel__model-retry:hover {
   background: #3a3a3a;
 }
-.identra-cmd__transcript {
-  max-height: 240px;
-  overflow-y: auto;
+/* The orchestrator's own terminal, not a transcript of it. A fixed height rather than one that
+   grows with the conversation: this runs for as long as the agent works, and a bar that walks up
+   the screen while you read it is worse than one that scrolls. Aubergine like every other terminal
+   in the app, because that is what it is. */
+.identra-cmd__pane {
+  height: 260px;
   margin: 0 0 8px;
-  padding: 10px 12px;
+  padding: 8px 10px;
   border-radius: 9px;
-  background: #1e1e1e;
+  background: #300a24;
   border: 1px solid var(--panel-edge);
-  color: #d6d6d6;
-  font-family: "Ubuntu Mono", Menlo, Consolas, monospace;
-  font-size: 12px;
-  line-height: 1.5;
-  /* Agent output is pre-formatted and frequently wider than this pane. Wrapping rather than
-     scrolling sideways keeps it readable, since nobody scrolls a chat horizontally. */
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+}
+.identra-cmd__pane .xterm {
+  height: 100%;
 }
 .identra-cmd__label {
   flex: none;

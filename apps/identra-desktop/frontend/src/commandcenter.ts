@@ -36,50 +36,6 @@ export function planSeat(
   return { kind: "create", agentId: defaultAgentId };
 }
 
-// Everything an agent CLI paints to redraw its own screen, which is noise once the output is being
-// read as a conversation rather than run as a terminal.
-//
-// Three families, because they terminate differently and one regex for all of them would be wrong
-// on at least one: CSI (colour, cursor moves, line clears), OSC (window titles, hyperlinks, ended
-// by BEL or ST), and the short two-byte escapes like charset selection.
-const CSI = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
-const OSC = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
-const SHORT_ESC = /\x1b[()][AB0-2]|\x1b[=>78MDEHc]/g;
-
-// How much of the conversation the command center keeps. The tail is what a person is reading; the
-// head is what they already read and scrolled past.
-export const TRANSCRIPT_MAX = 12000;
-
-/// Raw PTY bytes as something readable in the command center.
-///
-/// This deliberately does not try to reconstruct a chat UI out of a TUI. An agent CLI paints boxes,
-/// moves the cursor and repaints lines in place, and faithfully replaying that into a scrolling
-/// pane would need a terminal emulator, which is exactly the thing the command center exists to not
-/// make the user read. What it does instead is take the escape sequences out and leave the words
-/// in, which is the part a person is actually following.
-///
-/// The carriage-return handling is the one piece of emulation kept, because without it every
-/// progress spinner and re-drawn line arrives as a run of duplicates: a CR means "go back to the
-/// start of this line", so whatever was on that line before it is what got overwritten.
-export function readableTranscript(raw: string): string {
-  const clean = raw
-    .replace(OSC, "")
-    .replace(CSI, "")
-    .replace(SHORT_ESC, "")
-    // A line rewritten in place keeps only its final state, the same as it would look on screen.
-    .split("\n")
-    .map((line) => {
-      const parts = line.split("\r");
-      return parts[parts.length - 1] ?? "";
-    })
-    .join("\n")
-    // Three or more blank lines is a repaint gap, not paragraphing.
-    .replace(/\n{3,}/g, "\n\n");
-  return clean.length > TRANSCRIPT_MAX
-    ? clean.slice(clean.length - TRANSCRIPT_MAX)
-    : clean;
-}
-
 // What actually gets typed into the seat's terminal.
 //
 // The brief goes in front of the very first instruction of a session rather than being sent on its

@@ -45,10 +45,8 @@ import {
   composeDispatch,
   planLine,
   planSeat,
-  readableTranscript,
   summarizePlan,
 } from "./commandcenter";
-import { appendTail } from "./devurl";
 import {
   agentsByKind,
   boardList,
@@ -64,7 +62,6 @@ import {
   memoryRevealOnce,
   noAgentsInstalled,
   onCanvasCommand,
-  onOutput,
   refreshAgents,
   seatBrief,
   terminalInput,
@@ -99,17 +96,12 @@ const SEAT_POLL_MS = 2500;
 // one-time reveal. Matches the panel's own poll: two small reads a few seconds apart cost nothing.
 const MEMORY_POLL_MS = 2000;
 // The headless orchestrator still runs inside a PTY, and a PTY has a size whether or not anyone is
-// looking at it. These are the dimensions the CLI wraps its output to, so they are chosen for
-// reading in the command center pane rather than to match any window: wide enough that code and
-// tables are not folded into nonsense, tall enough that a CLI which paints a full screen has room
-// to do it.
+// looking at it. This is only the size it is born at: the moment the command center pane mounts it
+// re-sizes the PTY to the box actually showing it, the same as any node. What these have to be is
+// big enough that the CLI's first screen, drawn before the pane has attached, is not folded into
+// nonsense that then has to be re-wrapped.
 const SEAT_COLS = 120;
 const SEAT_ROWS = 40;
-// The rolling window of raw bytes kept before the escape sequences are taken out. Larger than the
-// readable cap because stripping is lossy: a screenful of colour codes can be several times the
-// size of the words inside it, and trimming the raw buffer to the readable size would eat real
-// text on a heavily painted screen.
-const TRANSCRIPT_RAW_MAX = 48000;
 const DEFAULT_W = 480;
 const DEFAULT_H = 320;
 
@@ -591,10 +583,10 @@ export default function App() {
   // tool it needs to break the work up and hand it out, so this adds no new mechanism: it is the
   // canvas typing into a terminal on the user's behalf.
   const [dispatch, setDispatch] = useState<DispatchState>({ kind: "idle" });
-  // What the orchestrator has said, as text, for the command center pane. Held here rather than in
-  // CommandBar because the subscription has to outlive any one render of the bar and has to keep
-  // accumulating while the user is looking at something else.
-  const [transcript, setTranscript] = useState("");
+  // No transcript state here any more. The pane attaches to the seat's PTY itself and replays it
+  // from the engine's ring buffer, so what the orchestrator said while the user was looking
+  // somewhere else is on screen because the engine kept it, not because this component was
+  // accumulating a copy in memory.
   // The seat is briefed once per session, in front of the first instruction it receives. Kept in a
   // ref rather than state because nothing renders from it and it must not be stale inside the async
   // dispatch below.
@@ -676,11 +668,12 @@ export default function App() {
           });
           return;
         }
+        // A new orchestrator is a new conversation, and the pane is keyed on this id, so assigning
+        // it is also what tears the last one's terminal down and mounts a fresh one. Leaving the
+        // previous seat's screen above the new one would read as a session that had suddenly
+        // forgotten itself.
         assignSeat(nodeId);
         setSeatAgent(spec.name);
-        // A new orchestrator is a new conversation. Leaving the last one's output above it would
-        // read as one session that had suddenly forgotten itself.
-        setTranscript("");
         fresh = true;
         seatBriefed.current = false;
         // The CLI has a terminal but is still drawing its own first screen, and several of them
@@ -719,34 +712,6 @@ export default function App() {
   // What the seat is doing, shown next to the bar so the user does not have to read a scrolling
   // terminal to know whether anything came of what they typed.
   const [plan, setPlan] = useState<string | null>(null);
-  // The orchestrator's output, followed into the command center pane.
-  //
-  // Subscribed for the whole life of the workspace rather than while the bar is focused, because
-  // the seat keeps working when the user looks away and coming back to a pane that only starts from
-  // the moment you glanced at it would be worse than no pane. One rolling window, capped, so a
-  // session that runs all afternoon costs the same memory as one that ran for a minute.
-  //
-  // `stream: true` on the decoder matters: PTY output arrives in arbitrary chunks and a multi-byte
-  // character split across two of them decodes to a replacement char without it.
-  useEffect(() => {
-    if (seat === null) return;
-    const decoder = new TextDecoder();
-    let raw = "";
-    let dropped = false;
-    const unlisten = onOutput((e) => {
-      if (dropped || e.id !== seat) return;
-      raw = appendTail(
-        raw,
-        decoder.decode(new Uint8Array(e.data), { stream: true }),
-        TRANSCRIPT_RAW_MAX,
-      );
-      setTranscript(readableTranscript(raw));
-    });
-    return () => {
-      dropped = true;
-      void unlisten.then((off) => off());
-    };
-  }, [seat]);
 
   const [seatAsking, setSeatAsking] = useState(false);
 
@@ -1308,7 +1273,7 @@ export default function App() {
           seatName={seatName}
           state={dispatch}
           plan={plan}
-          transcript={transcript}
+          seatId={seat}
           awaitingAnswer={seatAsking}
           onSubmit={(instruction) => void sendToSeat(instruction)}
         />

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useAttachedTerminal } from "./attachTerminal";
 
 // The shortcut label, in the idiom of the machine it is drawn on. Read once: it cannot change
 // while the app is open, and it is on screen at all times. Exported because the empty canvas names
@@ -20,6 +21,9 @@ type Props = {
   // Resolved seat name for the label, or null when there is no seat yet. The bar still accepts an
   // instruction in that case: standing the seat up is part of dispatching the first one.
   seatName: string | null;
+  // The seat's node id, which is the PTY the pane attaches to. Null before the first instruction
+  // of a session, which is the one state where there is no pane at all.
+  seatId: string | null;
   state: DispatchState;
   // One line of plain English for what the seat has broken the work into, or null when the board is
   // empty. Counted off the shared board, so it is what is really happening rather than what an
@@ -28,9 +32,6 @@ type Props = {
   // The seat has stopped and the last thing it printed reads like a question. This is the moment
   // the user is the blocker, and the bar is where the answer goes, so it has to say so.
   awaitingAnswer: boolean;
-  // What the orchestrator has said so far, already stripped of escape sequences. Empty before the
-  // first instruction of a session, which is the one state where the pane is not drawn at all.
-  transcript: string;
   onSubmit: (instruction: string) => void;
 };
 
@@ -42,14 +43,35 @@ type Props = {
 /// the instruction reaches lives in App, next to the canvas state it needs.
 export default function CommandBar({
   seatName,
+  seatId,
   state,
   plan,
   awaitingAnswer,
-  transcript,
   onSubmit,
 }: Props) {
   const [text, setText] = useState("");
   const busy = state.kind === "sending";
+
+  // A real terminal, not a transcript.
+  //
+  // This pane used to strip the escape sequences out of the seat's output and show what was left.
+  // That cannot work, and it is worth saying why rather than tuning it again. An agent CLI is a
+  // full TUI: it does not print a paragraph, it positions each run of words with cursor moves and
+  // repaints regions in place. Delete those moves and the words weld together; turn them into
+  // whitespace and you are guessing which ones meant a space and which meant a line, and codex's
+  // first screen came out one word per line. The information needed to lay that text out is in the
+  // escapes, so anything that throws them away is reconstructing a terminal from what is left.
+  //
+  // There is already a terminal in this app, on every node. The pane uses it. What the orchestrator
+  // drew is what you read, exactly, and the whole class of "the command center is unreadable" goes
+  // with it. Read-only: the bar underneath is where instructions go.
+  const pane = useRef<HTMLDivElement>(null);
+  useAttachedTerminal(pane, seatId, {
+    kind: seatName ?? "The orchestrator",
+    fontSize: 12,
+    readOnly: true,
+    emptyMessage: "The orchestrator is not running.",
+  });
 
   // The whole product is "say what you want done", and until now the only way to say it was to
   // find the box with a mouse. Every node on this canvas is a terminal that swallows keystrokes,
@@ -76,17 +98,6 @@ export default function CommandBar({
     return () => window.removeEventListener("keydown", key, true);
   }, []);
 
-  // Follow the tail as the agent writes, the way a terminal does, but stop following the moment the
-  // user scrolls up: they are reading something, and yanking them back to the bottom every time a
-  // token arrives makes the pane unusable for the one thing it is for. Re-pinning when they return
-  // to the bottom is what makes that reversible without a control to explain.
-  const pane = useRef<HTMLPreElement>(null);
-  const pinned = useRef(true);
-  useEffect(() => {
-    const el = pane.current;
-    if (el !== null && pinned.current) el.scrollTop = el.scrollHeight;
-  }, [transcript]);
-
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const instruction = text.trim();
@@ -112,26 +123,20 @@ export default function CommandBar({
           is at the end of the conversation above; answer here.
         </p>
       )}
-      {transcript !== "" && (
+      {seatId !== null && (
         // The conversation, in the place the instruction was typed. This is the whole point of the
         // command center being headless: the orchestrator used to land on the canvas as a node, so
         // typing here meant going somewhere else to find out what happened. Reading and replying in
         // one place is what a chat is.
-        <pre
-          className="identra-cmd__transcript nodrag nowheel"
+        //
+        // Keyed on the seat id so a new orchestrator gets a new terminal rather than continuing the
+        // last one's screen underneath it, which is what standing a fresh seat up means.
+        <div
+          key={seatId}
+          className="identra-cmd__pane nodrag nowheel"
           ref={pane}
-          onScroll={(e) => {
-            const el = e.currentTarget;
-            // A small slack, because a fractional scrollHeight means an element pinned to the
-            // bottom is rarely exactly at it.
-            pinned.current =
-              el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-          }}
           aria-label="What the orchestrator has said"
-          aria-live="polite"
-        >
-          {transcript}
-        </pre>
+        />
       )}
       <div className="identra-cmd__row">
         <span className="identra-cmd__label">
