@@ -316,12 +316,19 @@ pub fn forget_recent(path: &Path) {
     }
 }
 
-/// Give a workspace a new name, moving its folder to match.
+/// Give a workspace a new name, moving its folder to match when the folder is Identra's to move.
 ///
-/// The folder is the id, so a rename is a move, and a move is the part that can go wrong: the
-/// canvas, the memory, and the bus state all live in that directory. I rename the directory first
-/// and only write the new title once it lands, so a failed move leaves a workspace that is intact
-/// and still called the old thing, rather than one whose name and location disagree.
+/// For a workspace Identra made the folder is the id, so a rename is a move, and a move is the part
+/// that can go wrong: the canvas, the memory, and the bus state all live in that directory. I rename
+/// the directory first and only write the new title once it lands, so a failed move leaves a
+/// workspace that is intact and still called the old thing, rather than one whose name and location
+/// disagree.
+///
+/// A folder you adopted is a different thing and gets the same answer [`delete`] gives: it is your
+/// repository, so only the label changes. It carries its own absolute path as its slug, which is
+/// what tells the two apart. Without that split this moved real repositories: `root.join(slug)` on
+/// an absolute slug is the slug, so renaming `~/code/api` relocated it under Identra's workspaces
+/// root, out from under the shell, the editor, and every other tool pointed at it.
 ///
 /// Returns the workspace at its new home. The caller must repoint anything holding the old path.
 pub fn rename(root: &Path, slug: &str, title: &str) -> io::Result<WorkspaceMeta> {
@@ -331,6 +338,9 @@ pub fn rename(root: &Path, slug: &str, title: &str) -> io::Result<WorkspaceMeta>
             io::ErrorKind::InvalidInput,
             "a workspace needs a name",
         ));
+    }
+    if Path::new(slug).is_absolute() {
+        return rename_adopted(Path::new(slug), title);
     }
     let from = root.join(slug);
     if !canvas::canvas_path(&from).is_file() {
@@ -360,6 +370,29 @@ pub fn rename(root: &Path, slug: &str, title: &str) -> io::Result<WorkspaceMeta>
         slug: to_slug,
         title: title.to_string(),
         path: to.display().to_string(),
+        canvas: board,
+    })
+}
+
+/// Rename a folder the user adopted: the title on its canvas, and nothing else.
+///
+/// The folder keeps its name and its place on disk, so the path other tools know it by stays the
+/// path it is. That makes this the one rename where the slug does not change, which is also why the
+/// caller needs no repointing after it.
+fn rename_adopted(path: &Path, title: &str) -> io::Result<WorkspaceMeta> {
+    if !canvas::canvas_path(path).is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("{} is not an open workspace", path.display()),
+        ));
+    }
+    let mut board = canvas::load(path);
+    board.title = title.to_string();
+    canvas::save(path, &board)?;
+    Ok(WorkspaceMeta {
+        slug: path.display().to_string(),
+        title: title.to_string(),
+        path: path.display().to_string(),
         canvas: board,
     })
 }
@@ -509,6 +542,57 @@ mod tests {
         assert!(rename(&root, "docs", "   ").is_err());
 
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Renaming a folder the user adopted must never move it. This shipped moving them: an adopted
+    /// workspace carries its absolute path as its slug, `root.join(absolute)` is that absolute path,
+    /// so the branch above relocated real repositories under Identra's workspaces root and every
+    /// other tool pointed at the old path found nothing.
+    #[test]
+    fn renaming_a_folder_you_adopted_leaves_it_exactly_where_it_is() {
+        let base = std::env::temp_dir().join(format!("identra-rn-adopt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("workspaces");
+        let repo = base.join("api");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        std::fs::write(repo.join("src/main.rs"), "fn main() {}").unwrap();
+        // The adopted shape, built directly rather than through `adopt`, which would write the
+        // process-wide recents file that the adoption test alongside this one owns. What is being
+        // checked here is the rename, and its input is a canvas in a folder and an absolute slug.
+        canvas::save(
+            &repo,
+            &Canvas {
+                title: "api".into(),
+                ..Canvas::default()
+            },
+        )
+        .unwrap();
+        let slug = repo.display().to_string();
+
+        let renamed = rename(&root, &slug, "Payments API").unwrap();
+
+        assert!(repo.is_dir(), "the user's repository is still where it was");
+        assert_eq!(
+            std::fs::read_to_string(repo.join("src/main.rs")).unwrap(),
+            "fn main() {}",
+            "and everything in it came along by not going anywhere"
+        );
+        assert!(
+            !root.join("payments-api").exists(),
+            "nothing of the user's was pulled into Identra's own root"
+        );
+        // The label changed and the identity did not, so nothing holding the old path is stale.
+        assert_eq!(renamed.title, "Payments API");
+        assert_eq!(renamed.path, repo.display().to_string());
+        assert_eq!(renamed.slug, slug);
+        // The canvas is where the name lives, so the recents list reads the new one for free.
+        assert_eq!(canvas::load(&repo).title, "Payments API");
+
+        // A path that is not an open workspace is refused rather than quietly given a canvas.
+        assert!(rename(&root, &base.join("nope").display().to_string(), "x").is_err());
+
+        std::fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]
