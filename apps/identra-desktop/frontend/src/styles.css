@@ -277,6 +277,27 @@ body {
   align-items: center;
   gap: 8px;
 }
+/* The orchestrator's conversation, above the input it is answering. Capped rather than sized to
+   its content: this grows for as long as the agent is working, and a bar that walks up the screen
+   while you read it is worse than one that scrolls. The height is roughly a dozen lines, which is
+   enough to hold a reply and its reasoning without covering the canvas it is talking about. */
+.identra-cmd__transcript {
+  max-height: 240px;
+  overflow-y: auto;
+  margin: 0 0 8px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: #1e1e1e;
+  border: 1px solid var(--panel-edge);
+  color: #d6d6d6;
+  font-family: "Ubuntu Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  /* Agent output is pre-formatted and frequently wider than this pane. Wrapping rather than
+     scrolling sideways keeps it readable, since nobody scrolls a chat horizontally. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .identra-cmd__label {
   flex: none;
   padding-left: 6px;

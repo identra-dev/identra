@@ -40,9 +40,12 @@ import {
   composeDispatch,
   planLine,
   planSeat,
+  readableTranscript,
   summarizePlan,
 } from "./commandcenter";
+import { appendTail } from "./devurl";
 import {
+  agentsByKind,
   boardList,
   canvasCommandResult,
   canvasExport,
@@ -56,10 +59,12 @@ import {
   memoryRevealOnce,
   noAgentsInstalled,
   onCanvasCommand,
+  onOutput,
   refreshAgents,
   seatBrief,
   terminalInput,
   terminalKill,
+  terminalStart,
   terminalStatus,
   workspaceOpen,
   workspaceOpenRecent,
@@ -88,6 +93,18 @@ const SEAT_POLL_MS = 2500;
 // How often the topbar re-reads how many facts the project has learned, for the badge and the
 // one-time reveal. Matches the panel's own poll: two small reads a few seconds apart cost nothing.
 const MEMORY_POLL_MS = 2000;
+// The headless orchestrator still runs inside a PTY, and a PTY has a size whether or not anyone is
+// looking at it. These are the dimensions the CLI wraps its output to, so they are chosen for
+// reading in the command center pane rather than to match any window: wide enough that code and
+// tables are not folded into nonsense, tall enough that a CLI which paints a full screen has room
+// to do it.
+const SEAT_COLS = 120;
+const SEAT_ROWS = 40;
+// The rolling window of raw bytes kept before the escape sequences are taken out. Larger than the
+// readable cap because stripping is lossy: a screenful of colour codes can be several times the
+// size of the words inside it, and trimming the raw buffer to the readable size would eat real
+// text on a heavily painted screen.
+const TRANSCRIPT_RAW_MAX = 48000;
 const DEFAULT_W = 480;
 const DEFAULT_H = 320;
 
@@ -151,6 +168,9 @@ export default function App() {
   // for the same reason the nodes have one: snapshot() runs outside render and has to write the
   // current seat, not the one from the render that scheduled the save.
   const [seat, setSeat] = useState<string | null>(null);
+  // The display name of whatever agent is holding the seat, for the bar's label. Set when the seat
+  // is stood up; there is no node to read it back off any more.
+  const [seatAgent, setSeatAgent] = useState<string | null>(null);
   const seatRef = useRef<string | null>(null);
   // The background this workspace wears. State because the canvas draws it, a ref so snapshot()
   // writes the current choice rather than the one from the render that scheduled the save.
@@ -515,9 +535,9 @@ export default function App() {
           console.warn(`could not close node ${n.id} cleanly`, err);
         });
       }
-      // Closing the node that held the seat vacates it. The command bar then has nothing to talk
-      // to and says so, which is better than dispatching into a node that is gone.
-      if (deleted.some((n) => n.id === seatRef.current)) assignSeat(null);
+      // No seat to vacate here. The orchestrator is headless, so deleting a node can never be the
+      // thing that takes the command center's agent away; it goes when its process does, which the
+      // liveness check at dispatch notices on its own.
       // A focus view over a node that just went is a window onto nothing; back to the canvas.
       setFocused((cur) =>
         cur !== null && deleted.some((n) => n.id === cur) ? null : cur,
@@ -569,32 +589,34 @@ export default function App() {
   // tool it needs to break the work up and hand it out, so this adds no new mechanism: it is the
   // canvas typing into a terminal on the user's behalf.
   const [dispatch, setDispatch] = useState<DispatchState>({ kind: "idle" });
+  // What the orchestrator has said, as text, for the command center pane. Held here rather than in
+  // CommandBar because the subscription has to outlive any one render of the bar and has to keep
+  // accumulating while the user is looking at something else.
+  const [transcript, setTranscript] = useState("");
   // The seat is briefed once per session, in front of the first instruction it receives. Kept in a
   // ref rather than state because nothing renders from it and it must not be stale inside the async
   // dispatch below.
   const seatBriefed = useRef(false);
 
-  // A freshly spawned node has no PTY for a moment: AgentNode starts the CLI after it mounts and
-  // measures its terminal. Writing before that is writing into nothing, so I wait for the engine to
-  // report a terminal under this id. I poll because the alternative is a started event that nothing
-  // else needs, and the wait is short and only happens when the seat is being stood up.
-  const waitForTerminal = useCallback(async (nodeId: string) => {
-    const deadline = Date.now() + 15000;
-    while (Date.now() < deadline) {
-      // A null status means no terminal under that id yet, which is the state being waited out. A
-      // rejection means the same thing from the other direction, so both just retry.
-      const status = await terminalStatus(nodeId).catch(() => null);
-      if (status !== null) return true;
-      await new Promise((r) => setTimeout(r, 150));
-    }
-    return false;
-  }, []);
-
+  // The poll that used to live here waited for AgentNode to mount, measure a terminal and start the
+  // CLI, because the seat was a node and that was the only way its PTY came into being. A headless
+  // seat starts its own PTY and `terminal_start` has spawned the process by the time it returns, so
+  // there is nothing left to wait for.
   const sendToSeat = useCallback(
     async (instruction: string) => {
+      // Liveness, not canvas membership: the seat is headless and never appears as a node, so the
+      // only question that means anything is whether its process is still there.
+      const current = seatRef.current;
+      const alive =
+        current === null
+          ? false
+          : await terminalStatus(current)
+              .then((s) => s !== null && s !== "exited")
+              .catch(() => false);
+
       const plan = planSeat(
-        seatRef.current,
-        nodesRef.current.map((n) => n.id),
+        current,
+        alive,
         await defaultOrchestrator().catch(() => null),
       );
 
@@ -617,17 +639,48 @@ export default function App() {
           kind: "sending",
           note: `Starting ${agent?.name ?? plan.agentId} as the orchestrator`,
         });
-        nodeId = addNode(plan.agentId, agent?.name ?? plan.agentId);
-        assignSeat(nodeId);
-        fresh = true;
-        seatBriefed.current = false;
-        if (!(await waitForTerminal(nodeId))) {
+        // The orchestrator is headless on purpose. It runs a real CLI, because that is the only
+        // thing that can actually do the work, but it never becomes a node: putting it on the
+        // canvas made the command center a remote control for a terminal the user then had to go
+        // and read. The conversation belongs in the bar they typed into.
+        //
+        // Starting the PTY here rather than letting a node component do it is what makes that
+        // possible, and it also removes the wait that used to be needed: `terminal_start` has
+        // spawned the process by the time it returns, so there is no window where the seat exists
+        // on the canvas but has nothing behind it.
+        const spec = (await agentsByKind()).get(plan.agentId);
+        if (!spec || !spec.available) {
           setDispatch({
             kind: "failed",
-            error: `${agent?.name ?? plan.agentId} did not start, so the instruction was not sent.`,
+            error: `${agent?.name ?? plan.agentId} is not installed or not on your PATH, so the instruction was not sent.`,
           });
           return;
         }
+        nodeId = crypto.randomUUID();
+        try {
+          await terminalStart(
+            nodeId,
+            plan.agentId,
+            spec.cmd,
+            spec.args,
+            null,
+            SEAT_ROWS,
+            SEAT_COLS,
+          );
+        } catch (e) {
+          setDispatch({
+            kind: "failed",
+            error: `${spec.name} did not start, so the instruction was not sent: ${String(e)}`,
+          });
+          return;
+        }
+        assignSeat(nodeId);
+        setSeatAgent(spec.name);
+        // A new orchestrator is a new conversation. Leaving the last one's output above it would
+        // read as one session that had suddenly forgotten itself.
+        setTranscript("");
+        fresh = true;
+        seatBriefed.current = false;
         // The CLI has a terminal but is still drawing its own first screen, and several of them
         // discard whatever is already pending when they take over the tty. A short settle costs one
         // beat on the first instruction of a session and saves silently losing it.
@@ -647,7 +700,7 @@ export default function App() {
         seatBriefed.current = true;
         setDispatch({
           kind: "sent",
-          note: "Sent. Watch the orchestrator node for what it does next.",
+          note: "Sent. Its reply appears here as it works.",
         });
       } catch (e) {
         // The seat node was closed, or its agent has exited. Either way the instruction did not
@@ -658,12 +711,41 @@ export default function App() {
         });
       }
     },
-    [addNode, assignSeat, waitForTerminal],
+    [assignSeat],
   );
 
   // What the seat is doing, shown next to the bar so the user does not have to read a scrolling
   // terminal to know whether anything came of what they typed.
   const [plan, setPlan] = useState<string | null>(null);
+  // The orchestrator's output, followed into the command center pane.
+  //
+  // Subscribed for the whole life of the workspace rather than while the bar is focused, because
+  // the seat keeps working when the user looks away and coming back to a pane that only starts from
+  // the moment you glanced at it would be worse than no pane. One rolling window, capped, so a
+  // session that runs all afternoon costs the same memory as one that ran for a minute.
+  //
+  // `stream: true` on the decoder matters: PTY output arrives in arbitrary chunks and a multi-byte
+  // character split across two of them decodes to a replacement char without it.
+  useEffect(() => {
+    if (seat === null) return;
+    const decoder = new TextDecoder();
+    let raw = "";
+    let dropped = false;
+    const unlisten = onOutput((e) => {
+      if (dropped || e.id !== seat) return;
+      raw = appendTail(
+        raw,
+        decoder.decode(new Uint8Array(e.data), { stream: true }),
+        TRANSCRIPT_RAW_MAX,
+      );
+      setTranscript(readableTranscript(raw));
+    });
+    return () => {
+      dropped = true;
+      void unlisten.then((off) => off());
+    };
+  }, [seat]);
+
   const [seatAsking, setSeatAsking] = useState(false);
 
   // Polled rather than pushed, and only while a seat exists. The board is written by agents through
@@ -951,17 +1033,18 @@ export default function App() {
           onOpenPreview: openPreview,
           onFocus: setFocused,
         };
-        return n.id === seat
-          ? { ...n, data: { ...data, seat: true }, className: "is-seat" }
-          : { ...n, data };
+        // No seat stamping here any more: the orchestrator is headless, so no node on this canvas
+        // is ever the seat. Every node here is work the user placed themselves.
+        return { ...n, data };
       }),
-    [nodes, seat, toggleLock, openPreview],
+    [nodes, toggleLock, openPreview],
   );
 
-  const seatName =
-    seat === null
-      ? null
-      : (nodes.find((n) => n.id === seat)?.data.title ?? null);
+  // Held in state rather than read off a node, because the seat no longer is one. It lives for the
+  // session only, which is all it needs to: terminals die with the process, so a seat id restored
+  // from a saved canvas has nothing running behind it and the next instruction stands a fresh one
+  // up anyway.
+  const seatName = seat === null ? null : seatAgent;
 
   if (!workspace) {
     return <WorkspacePicker onOpen={(w) => void openWorkspace(w)} />;
@@ -1201,6 +1284,7 @@ export default function App() {
           seatName={seatName}
           state={dispatch}
           plan={plan}
+          transcript={transcript}
           awaitingAnswer={seatAsking}
           onSubmit={(instruction) => void sendToSeat(instruction)}
         />
