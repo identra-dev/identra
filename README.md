@@ -35,8 +35,8 @@ compile.
 **Linux**
 
 ```bash
-chmod +x Identra_0.1.0_amd64.AppImage
-./Identra_0.1.0_amd64.AppImage
+chmod +x Identra_0.1.1_amd64.AppImage
+./Identra_0.1.1_amd64.AppImage
 ```
 
 There is a `.deb` and an `.rpm` there too if you would rather install it properly.
@@ -83,7 +83,8 @@ agent so nobody starts from zero.
 
 - Drop an agent node on an infinite canvas. It spawns a real `codex` process in a terminal
   you can type into. No shell wrapper, no fake sandbox, the actual CLI on your machine.
-- Type what you want done into the command bar and an orchestrator seat breaks the work up,
+- Type what you want done into the command bar (`⌘K` / `Ctrl+K` from anywhere, including from
+  inside a node's terminal) and an orchestrator seat breaks the work up,
   spawns the helper nodes it needs, wires them, and puts the pieces on a shared task board you
   can watch. Wired agents message each other, split work, and hand results back over a local
   bus. An edge between two nodes is the permission: no wire, no shared context.
