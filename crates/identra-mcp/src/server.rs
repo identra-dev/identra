@@ -1109,14 +1109,27 @@ fn queue_message(
     // Best effort by design. A peer that is not running yet has nothing to nudge, and that is fine:
     // it reads its queue when it starts. Failing the send here would report a lost message that is
     // not lost.
-    let line = format!(
-        "\r\n[identra] {waiting} message(s) waiting from your peers. Call check_inbox to read them.\r\n"
-    );
-    let _ = bus.manager.input(peer, line.as_bytes());
+    let _ = bus.manager.input(peer, nudge_line(waiting).as_bytes());
 
     Ok(format!(
         "queued for {peer}. They will read it when they check their inbox; it is not lost if they are busy."
     ))
+}
+
+/// The one line typed into a peer's terminal to tell it mail arrived.
+///
+/// The shape is the whole point, so it lives in its own function where a test can hold it. Body,
+/// then a lone carriage return: exactly what the command bar already proved submits
+/// (`composeDispatch`). It used to be wrapped in `\r\n` … `\r\n`, and that wrapping is what put a
+/// human keystroke in the middle of every handoff. A leading `\n` puts an agent CLI's input box
+/// into multiline mode, and once it is there the trailing `\r` inserts another newline rather than
+/// submitting, so the nudge sat in the peer's prompt fully typed and unsent until someone pressed
+/// enter for it. A handoff that waits on a person is not a handoff.
+///
+/// No newline anywhere in the returned string is therefore a correctness property, not a style
+/// preference, which is what the test asserts.
+fn nudge_line(waiting: i64) -> String {
+    format!("[identra] {waiting} message(s) waiting from your peers. Call check_inbox now.\r")
 }
 
 fn read_inbox(project_dir: &std::path::Path, caller: &str) -> Result<String, String> {
@@ -1439,6 +1452,30 @@ mod tests {
         );
 
         assert!(dispatch(&bus, "node-a", "nonsense", None).await.is_err());
+    }
+
+    /// A handoff must not need a human. The nudge is typed into the peer's live prompt, so the
+    /// bytes are the interface: a lone `\r` submits it, and any `\n` at all puts the CLI's input
+    /// box into multiline mode where the `\r` stops submitting and starts inserting. That is the
+    /// bug this pins — the peer sat with the nudge typed and unsent until a person pressed enter,
+    /// once per handoff, which is exactly the friction a canvas of agents exists to remove.
+    #[test]
+    fn the_peer_nudge_submits_itself_without_a_keystroke() {
+        let line = nudge_line(3);
+
+        assert!(
+            line.ends_with('\r'),
+            "the return is what submits it: {line:?}"
+        );
+        assert!(
+            !line.contains('\n'),
+            "a newline flips the input box to multiline and the return stops submitting: {line:?}"
+        );
+        // Exactly one, and it is the last byte: an earlier one would submit a partial line and
+        // leave the rest of the nudge typed into the next prompt.
+        assert_eq!(line.matches('\r').count(), 1);
+        // It still has to say the thing, or it is a submitted line of nothing.
+        assert!(line.contains("3 message(s)") && line.contains("check_inbox"));
     }
 
     /// Put facts straight into a workspace's store, the way an agent's add_memory would, but with
