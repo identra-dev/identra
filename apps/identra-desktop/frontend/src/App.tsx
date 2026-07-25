@@ -254,14 +254,17 @@ export default function App() {
     nodesRef.current = loaded;
     edgesRef.current = canvas.edges;
     titleRef.current = canvas.title;
-    // A seat pointing at a node that is no longer here reads as no seat. That happens whenever the
-    // seat node was closed, and resolving it on load means nothing downstream has to keep asking
-    // whether the seat still exists.
-    const restored = canvas.nodes.some((n) => n.id === canvas.seat)
-      ? canvas.seat
-      : null;
-    seatRef.current = restored;
-    setSeat(restored);
+    // Opening a workspace always starts with no seat, and it is worth saying why rather than
+    // leaving the check that used to be here. That check asked whether the saved seat id was still
+    // a node on the canvas, which made sense when the orchestrator was one. It is headless now, so
+    // it is never in `canvas.nodes` and the answer was always no.
+    //
+    // The honest version is the same answer for a better reason: a seat is a running process, and
+    // processes do not survive the app closing. A restored id could only ever name a PTY that is
+    // gone, and the first instruction stands a fresh one up anyway.
+    seatRef.current = null;
+    setSeat(null);
+    setSeatAgent(null);
     wallpaperRef.current = canvas.wallpaper;
     setWallpaper(canvas.wallpaper);
     setNodes(loaded);
