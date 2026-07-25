@@ -168,6 +168,14 @@ impl Store {
     }
 
     fn from_conn(conn: Connection) -> Result<Store, Error> {
+        // WAL plus a busy timeout, set at the one gate every caller passes through. This file is
+        // opened per call from several places at once: an agent writing a fact over the bus, the
+        // work panel polling every two seconds, and a fresh agent reading the recent facts at
+        // connect. Under the default rollback journal a read and a write collide as "database is
+        // locked", and that likelihood peaks during a demo or a watched first run. WAL lets readers
+        // run alongside one writer; the timeout makes a second writer wait its turn rather than
+        // fail. On an in-memory store WAL is a no-op, which is fine: nothing shares that handle.
+        conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;")?;
         conn.execute_batch(SCHEMA)?;
         Ok(Store {
             conn,
@@ -694,5 +702,71 @@ mod tests {
         let hits = store.search(&only_other, "fact", 10).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].content, "claude fact");
+    }
+
+    /// A file store opens in WAL with a busy timeout, so the panel poll and an agent's write do not
+    /// collide as "database is locked". Pinning the pragmas here catches a regression that would
+    /// otherwise only show under concurrent load, which is exactly when it would be worst.
+    #[test]
+    fn a_file_store_opens_in_wal_with_a_busy_timeout() {
+        let dir = std::env::temp_dir().join(format!("identra-wal-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::open(dir.join("memory.db")).unwrap();
+
+        let mode: String = store
+            .conn
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(mode.to_lowercase(), "wal");
+        let timeout: i64 = store
+            .conn
+            .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
+            .unwrap();
+        assert!(timeout >= 5000, "the busy timeout is set, got {timeout}");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The real thing the pragmas buy: a reader on one connection keeps working while a writer on
+    /// another hammers the same file. Under the default journal this is where the lock error shows
+    /// up; every `recent` call here would panic on it. With WAL and the timeout, none do.
+    #[test]
+    fn a_reader_is_not_locked_out_while_a_writer_works() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        let dir = std::env::temp_dir().join(format!("identra-wal2-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("memory.db");
+        // A fact to read before the writer starts, so the reader always has a row.
+        Store::open(&path)
+            .unwrap()
+            .add(&scope("r"), "seed")
+            .unwrap();
+
+        let gate = Arc::new(Barrier::new(2));
+        let writer = {
+            let path = path.clone();
+            let gate = gate.clone();
+            thread::spawn(move || {
+                let store = Store::open(&path).unwrap();
+                gate.wait();
+                for i in 0..200 {
+                    store.add(&scope("r"), &format!("w {i}")).unwrap();
+                }
+            })
+        };
+
+        let reader = Store::open(&path).unwrap();
+        gate.wait();
+        for _ in 0..200 {
+            // Panics if this ever comes back "database is locked", which is the whole point.
+            reader.recent(&Filter::default(), 10).unwrap();
+        }
+        writer.join().unwrap();
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
