@@ -51,6 +51,18 @@ pub struct Settings {
     /// has to keep loading, and it lands on `Workspace` with everything else it had intact.
     #[serde(default)]
     pub autonomy: Autonomy,
+    /// What the person here would like to be called.
+    ///
+    /// Not a username and not an identity: nothing authenticates against it, nothing is keyed by
+    /// it, and it never leaves this file. It exists so the app can say hello to somebody rather
+    /// than to nobody, which is a small thing that changes how a tool feels to open in the
+    /// morning. Pick something daft; that is the point.
+    ///
+    /// `None` means never asked, which is what the first run looks for. An empty string is a
+    /// different answer — asked, and declined — and is kept distinct so someone who would rather
+    /// not be greeted is not asked again every launch.
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -62,6 +74,7 @@ impl Default for Settings {
         Settings {
             embeddings: true,
             autonomy: Autonomy::default(),
+            name: None,
         }
     }
 }
@@ -145,6 +158,7 @@ mod tests {
             &Settings {
                 embeddings: false,
                 autonomy: Autonomy::Ask,
+                name: Some("Captain Segfault".into()),
             },
         )
         .unwrap();
@@ -153,6 +167,24 @@ mod tests {
             "the toggle comes back as written"
         );
         assert_eq!(load_from(&file).autonomy, Autonomy::Ask);
+        assert_eq!(
+            load_from(&file).name.as_deref(),
+            Some("Captain Segfault"),
+            "what someone asked to be called comes back exactly as they typed it"
+        );
+
+        // Never asked and asked-then-declined are different answers, and the difference is the
+        // whole reason this is an Option rather than a String. `None` is what the first run looks
+        // for; an empty name is someone who would rather not be greeted, and asking them again
+        // every launch is how a friendly touch turns into a nag.
+        std::fs::write(&file, r#"{"name":""}"#).unwrap();
+        assert_eq!(load_from(&file).name.as_deref(), Some(""));
+        std::fs::write(&file, r#"{"embeddings":true}"#).unwrap();
+        assert_eq!(
+            load_from(&file).name,
+            None,
+            "a file that never said is None"
+        );
 
         // A settings file written before `autonomy` existed still loads, keeps what it did say, and
         // lands on the default for what it did not. Without this an upgrade would silently reset

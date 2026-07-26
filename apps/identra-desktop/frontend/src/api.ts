@@ -264,6 +264,10 @@ export type Settings = {
   // Read per node launch rather than per process, so this one lands on the next agent dropped
   // rather than at the next restart.
   autonomy: Autonomy;
+  // What the person here would like to be called. `null` means never asked, which is what the
+  // first run looks for; `""` means asked and declined, and stays distinct so someone who would
+  // rather not be greeted is not asked again every launch.
+  name: string | null;
 };
 
 // What the embedding model is doing. "off" is a choice rather than a problem; "failed" carries the

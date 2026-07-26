@@ -1,10 +1,11 @@
 #!/bin/sh
 # Install Identra.
 #
-#   curl -fsSL https://raw.githubusercontent.com/identra-dev/identra/main/install.sh | sh
+#   curl -fsSL https://identra.dev/install.sh | sh
 #
-# Nothing in here is tied to where it is served from, so the site can hand out the same file at a
-# shorter URL without this needing to know about it.
+# The site serves a copy of this exact file. That copy needs no maintenance per release, which is
+# the point of resolving the version at runtime rather than baking one in: a new release is picked
+# up by every existing copy of this script the moment it is published.
 #
 # One download, and then you are done: the release bundle carries its own runtime and its own
 # embedding model, so nothing here fetches a second thing on first launch or asks you to install a

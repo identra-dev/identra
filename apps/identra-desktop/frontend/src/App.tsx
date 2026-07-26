@@ -32,6 +32,7 @@ import WorkPanel from "./WorkPanel";
 import WorkspaceMenu from "./WorkspaceMenu";
 import CommandBar, { MOD_LABEL, type DispatchState } from "./CommandBar";
 import FocusView from "./FocusView";
+import Greeting from "./Greeting";
 import { REFIT_EVENT } from "./attachTerminal";
 import WallpaperPicker from "./WallpaperPicker";
 import { AgentIcon } from "./icons";
@@ -1147,6 +1148,10 @@ export default function App() {
           control you reach for to go somewhere writable. Whatever height the message wraps to, the
           bar now begins under it. */}
       <div className="identra-topstack">
+        {/* Hello, before anything else in the stack. It is the first thing that should reach you on
+            opening the app, and it is gone within a few seconds, so nothing below it is displaced
+            for long. */}
+        <Greeting />
         {saveError !== null && (
           // It stays until a save works. A canvas that is not on disk is not a thing to mention
           // once and then hide: every drag from here is work that will not be there tomorrow, and

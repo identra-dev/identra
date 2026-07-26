@@ -858,6 +858,127 @@ body {
   pointer-events: auto;
 }
 
+/* Hello.
+   Quiet on purpose: this is a greeting, not a notification, so it gets the orange only on the name
+   itself and no border, no icon, and nothing to dismiss. It fades on its own after a few seconds.
+   Sitting first in the topstack means it arrives where the eye already is on opening the window. */
+.identra-greeting {
+  margin: 12px 12px 0;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--panel);
+  border-radius: 999px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  animation: identra-greet 4.2s ease-in-out forwards;
+}
+/* Up and in, hold, then out. The hold is most of it: the movement is there to catch the eye once,
+   not to be watched. Matches GREETING_MS in Greeting.tsx — if one changes, change the other, or the
+   line either vanishes mid-fade or sits there fully opaque and then disappears. */
+@keyframes identra-greet {
+  0% {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  8% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  82% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* The fade is decoration; the words are the content. Someone who has asked for less movement
+     still gets the greeting, it just appears and leaves without travelling. */
+  .identra-greeting {
+    animation: none;
+  }
+}
+
+/* The one question Identra asks about the person using it, asked once. Centred like the install
+   panel because it is the same kind of moment: the app has nothing to show yet and is talking to
+   you rather than about the canvas. */
+.identra-hello {
+  position: fixed;
+  left: 50%;
+  top: 40%;
+  transform: translate(-50%, -50%);
+  width: 380px;
+  max-width: calc(100vw - 48px);
+  padding: 22px 24px;
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  text-align: center;
+}
+.identra-hello__lead {
+  margin: 0 0 14px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+.identra-hello__row {
+  display: flex;
+  gap: 8px;
+}
+.identra-hello__input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--panel-edge);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.identra-hello__input:focus {
+  outline: 2px solid var(--yaru-orange);
+  outline-offset: -1px;
+}
+.identra-hello__go {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--yaru-orange);
+  border: none;
+  border-radius: 6px;
+  padding: 8px 14px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.identra-hello__go:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.identra-hello__go:not(:disabled):hover {
+  filter: brightness(1.08);
+}
+/* The way out, styled as a way out rather than as a second choice: no fill, no border, and it sits
+   under the row. Easy to find, impossible to press by accident. */
+.identra-hello__skip {
+  margin-top: 12px;
+  font: inherit;
+  font-size: 12px;
+  color: #b6b6b6;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.identra-hello__skip:hover {
+  color: var(--text);
+}
+
 /* Top left: which workspace, and the way into what the agents are doing. Wraps rather than running
    off the edge: this is eight controls in a row and a half-width window is an ordinary thing to
    have next to an editor. */
@@ -1537,6 +1658,29 @@ body {
 .identra-settings__row input {
   margin-top: 2px;
   accent-color: var(--yaru-orange);
+}
+/* A text row reads top to bottom, not left to right: the label sits above its field rather than
+   beside it the way a checkbox does, and the field takes the full width because a name is longer
+   than a tick. */
+.identra-settings__row--text {
+  flex-direction: column;
+  gap: 6px;
+  cursor: default;
+}
+.identra-settings__text {
+  width: 100%;
+  margin-top: 0;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--panel-edge);
+  border-radius: 6px;
+  padding: 7px 9px;
+}
+.identra-settings__text:focus {
+  outline: 2px solid var(--yaru-orange);
+  outline-offset: -1px;
 }
 .identra-settings__name {
   display: block;

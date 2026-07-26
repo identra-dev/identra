@@ -44,6 +44,32 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
         )}
         {settings !== null && (
           <>
+            {/* Whatever you said on the first run, changed here. A name you pick in a moment of
+                humour and then have to look at every morning needs a way back, and "reinstall the
+                app" is not one. Blank turns the greeting off, which is the same answer as
+                declining the first time and is why the field explains it rather than hiding a
+                separate toggle behind it. */}
+            <label className="identra-settings__row identra-settings__row--text">
+              <span>
+                <span className="identra-settings__name">What to call you</span>
+                <span className="identra-settings__hint">
+                  Used to say hello when Identra opens, and nowhere else. It
+                  stays on this machine. Leave it empty for no greeting.
+                </span>
+              </span>
+              <input
+                type="text"
+                className="identra-settings__text"
+                value={settings.name ?? ""}
+                maxLength={40}
+                placeholder="Captain Segfault"
+                aria-label="What to call you"
+                // On change rather than on blur, so it saves as you type and there is no
+                // half-typed name lost to closing the panel. `apply` already rolls back and says
+                // why if a write fails.
+                onChange={(e) => void apply({ ...settings, name: e.target.value })}
+              />
+            </label>
             <label className="identra-settings__row">
               <input
                 type="checkbox"
