@@ -29,8 +29,19 @@ Rust engine, Tauri shell, React canvas. Apache-2.0.
 
 ## Download and run
 
-Grab a build from [Releases](https://github.com/identra-dev/identra/releases). Nothing to
-compile.
+```bash
+curl -fsSL https://raw.githubusercontent.com/identra-dev/identra/main/install.sh | sh
+```
+
+One command, one download. It picks the right build for your machine, installs it, and puts
+Identra in your app menu. On Linux that is the `.deb` where apt exists and the `.rpm` where dnf
+does; on macOS it is the `.dmg`, copied to Applications. Nothing is fetched afterwards — the
+build carries its own runtime and its own embedding model, so first launch works offline.
+
+`apt remove identra` uninstalls it, or drag the app to the Trash on macOS.
+
+If you would rather do it by hand, every build is on
+[Releases](https://github.com/identra-dev/identra/releases). Nothing to compile.
 
 **Linux**
 
@@ -39,7 +50,9 @@ chmod +x Identra_0.1.1_amd64.AppImage
 ./Identra_0.1.1_amd64.AppImage
 ```
 
-There is a `.deb` and an `.rpm` there too if you would rather install it properly.
+The AppImage needs `libfuse2`, which current Ubuntu and Fedora no longer ship. If it will not
+start, the `.deb` or `.rpm` next to it has no such problem — which is why the script prefers
+them.
 
 **macOS**
 
