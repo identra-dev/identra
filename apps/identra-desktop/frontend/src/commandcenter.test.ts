@@ -47,17 +47,19 @@ test("the bar talks to the seat that exists, and stands one up when it does not"
 
 test("the brief rides in front of the first instruction and never again", () => {
   const first = composeDispatch("BRIEF", "ship the thing", true);
-  expect(first).toBe("BRIEF\n\nship the thing\r");
+  expect(first).toBe("BRIEF\n\nship the thing");
 
   // Every later instruction goes through as the user typed it. Resending the brief would spend the
   // agent's context restating something it was told at the start of the session.
-  expect(composeDispatch("BRIEF", "now the tests", false)).toBe(
-    "now the tests\r",
-  );
+  expect(composeDispatch("BRIEF", "now the tests", false)).toBe("now the tests");
 
-  // The carriage return is what submits the line. Without it the text sits on the agent's prompt
-  // looking dispatched but doing nothing, which is the worst of both.
-  expect(first.endsWith("\r")).toBe(true);
+  // No carriage return anywhere in what gets written, and that is the fix rather than an omission.
+  // Body and return in a single write is what an agent CLI reads as a paste, and a return inside a
+  // paste inserts a newline in the composer instead of submitting — so the instruction arrived
+  // fully typed into the prompt and sat there waiting on a human. `terminalSend` presses enter as
+  // its own write a beat later, which is what makes it a keystroke. Putting a `\r` back here would
+  // bring the bug straight back.
+  expect(first).not.toContain("\r");
 });
 
 test("the plan is counted off the board, with blocked resolved against what is finished", () => {

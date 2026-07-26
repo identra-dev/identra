@@ -64,7 +64,7 @@ import {
   onCanvasCommand,
   refreshAgents,
   seatBrief,
-  terminalInput,
+  terminalSend,
   terminalKill,
   terminalStart,
   terminalStatus,
@@ -699,7 +699,7 @@ export default function App() {
 
       setDispatch({ kind: "sending", note: "Sending to the orchestrator" });
       try {
-        await terminalInput(
+        await terminalSend(
           nodeId,
           composeDispatch(
             await seatBrief(),

@@ -1232,7 +1232,7 @@ fn queue_message(
     // Best effort by design. A peer that is not running yet has nothing to nudge, and that is fine:
     // it reads its queue when it starts. Failing the send here would report a lost message that is
     // not lost.
-    let _ = bus.manager.input(peer, nudge_line(waiting).as_bytes());
+    let _ = bus.manager.send_message(peer, &nudge_line(waiting));
 
     Ok(format!(
         "queued for {peer}. They will read it when they check their inbox; it is not lost if they are busy."
@@ -1241,18 +1241,22 @@ fn queue_message(
 
 /// The one line typed into a peer's terminal to tell it mail arrived.
 ///
-/// The shape is the whole point, so it lives in its own function where a test can hold it. Body,
-/// then a lone carriage return: exactly what the command bar already proved submits
-/// (`composeDispatch`). It used to be wrapped in `\r\n` … `\r\n`, and that wrapping is what put a
-/// human keystroke in the middle of every handoff. A leading `\n` puts an agent CLI's input box
-/// into multiline mode, and once it is there the trailing `\r` inserts another newline rather than
-/// submitting, so the nudge sat in the peer's prompt fully typed and unsent until someone pressed
-/// enter for it. A handoff that waits on a person is not a handoff.
+/// The shape is the whole point, so it lives in its own function where a test can hold it. Body
+/// only: no carriage return and no newline anywhere in it.
 ///
-/// No newline anywhere in the returned string is therefore a correctness property, not a style
-/// preference, which is what the test asserts.
+/// It carried its own trailing `\r` once, and that is the bug that made every handoff wait on a
+/// person. Body and return in a single write is what an agent CLI reads as a paste, and a `\r`
+/// inside a paste goes into the composer as a newline instead of submitting it, so the nudge sat
+/// in the peer's prompt fully typed and unsent until someone pressed enter for it. Pressing enter
+/// is `send_message`'s job now, as a separate write after a pause, which is what makes it a
+/// keystroke rather than paste content.
+///
+/// So no `\r` and no `\n` here is a correctness property rather than a style preference: a return
+/// in the body would submit a partial line and leave the rest typed into the next prompt, and a
+/// newline would flip the input box into multiline mode where the real return stops submitting.
+/// That is what the test pins.
 fn nudge_line(waiting: i64) -> String {
-    format!("[identra] {waiting} message(s) waiting from your peers. Call check_inbox now.\r")
+    format!("[identra] {waiting} message(s) waiting from your peers. Call check_inbox now.")
 }
 
 fn read_inbox(project_dir: &std::path::Path, caller: &str) -> Result<String, String> {
@@ -1623,25 +1627,26 @@ mod tests {
     }
 
     /// A handoff must not need a human. The nudge is typed into the peer's live prompt, so the
-    /// bytes are the interface: a lone `\r` submits it, and any `\n` at all puts the CLI's input
-    /// box into multiline mode where the `\r` stops submitting and starts inserting. That is the
-    /// bug this pins — the peer sat with the nudge typed and unsent until a person pressed enter,
-    /// once per handoff, which is exactly the friction a canvas of agents exists to remove.
+    /// bytes are the interface, and this is the body only: `send_message` presses enter for it in a
+    /// write of its own, which is the part that makes an agent CLI read it as a keystroke rather
+    /// than as the tail of a paste.
+    ///
+    /// That is the bug this pins. The peer sat with the nudge typed and unsent until a person
+    /// pressed enter, once per handoff, which is exactly the friction a canvas of agents exists to
+    /// remove. Putting a `\r` back on the end here would bring it straight back.
     #[test]
     fn the_peer_nudge_submits_itself_without_a_keystroke() {
         let line = nudge_line(3);
 
         assert!(
-            line.ends_with('\r'),
-            "the return is what submits it: {line:?}"
+            !line.contains('\r'),
+            "the return is sent separately, or the CLI reads it as paste content and inserts a \
+             newline instead of submitting: {line:?}"
         );
         assert!(
             !line.contains('\n'),
             "a newline flips the input box to multiline and the return stops submitting: {line:?}"
         );
-        // Exactly one, and it is the last byte: an earlier one would submit a partial line and
-        // leave the rest of the nudge typed into the next prompt.
-        assert_eq!(line.matches('\r').count(), 1);
         // It still has to say the thing, or it is a submitted line of nothing.
         assert!(line.contains("3 message(s)") && line.contains("check_inbox"));
     }

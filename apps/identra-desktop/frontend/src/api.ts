@@ -136,6 +136,11 @@ export const terminalStart = (
 export const terminalInput = (id: string, data: string) =>
   invoke<void>("terminal_input", { id, data });
 
+/// Type a message into a node's agent and press enter for it. Use this for anything the app says
+/// on the user's behalf; `terminalInput` is for a person's own keystrokes going straight through.
+export const terminalSend = (id: string, text: string) =>
+  invoke<void>("terminal_send", { id, text });
+
 export const terminalResize = (id: string, rows: number, cols: number) =>
   invoke<void>("terminal_resize", { id, rows, cols });
 

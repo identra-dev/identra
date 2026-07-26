@@ -171,6 +171,20 @@ fn terminal_input(state: State<AppState>, id: String, data: String) -> Result<()
         .map_err(|e| e.to_string())
 }
 
+/// Type a whole message into a node's agent and press enter for it.
+///
+/// Separate from `terminal_input` because the two are genuinely different acts. That one is a
+/// person's keystrokes going straight through untouched, one key at a time. This one is the app
+/// speaking on the user's behalf, and it has to end with the agent actually working rather than
+/// with a filled-in prompt nobody submitted. `send_message` is what knows the difference.
+#[tauri::command]
+fn terminal_send(state: State<AppState>, id: String, text: String) -> Result<(), String> {
+    state
+        .manager
+        .send_message(&id, &text)
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn terminal_resize(state: State<AppState>, id: String, rows: u16, cols: u16) -> Result<(), String> {
     state
@@ -798,6 +812,7 @@ pub fn run() {
             seat_brief,
             terminal_start,
             terminal_input,
+            terminal_send,
             terminal_resize,
             terminal_snapshot,
             terminal_status,

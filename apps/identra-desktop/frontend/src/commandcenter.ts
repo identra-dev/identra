@@ -44,14 +44,17 @@ export function planSeat(
 // untouched: the agent has already been told how to work here, and repeating it every time would
 // spend context on something it already knows.
 //
-// The trailing carriage return is what submits the line, the same as pressing enter in the node.
+// No trailing carriage return, and that is the fix for the bug where an instruction arrived in the
+// agent's prompt fully typed and never sent. Body and return in one write is what an agent CLI
+// reads as a paste, and a return inside a paste is a newline in the composer rather than a submit —
+// correct on their side, since pasting three lines must not fire the prompt on the first one.
+// `terminalSend` presses enter separately, a beat later, which is what makes it a keystroke.
 export function composeDispatch(
   brief: string,
   instruction: string,
   seatIsNew: boolean,
 ): string {
-  const body = seatIsNew ? `${brief}\n\n${instruction}` : instruction;
-  return `${body}\r`;
+  return seatIsNew ? `${brief}\n\n${instruction}` : instruction;
 }
 
 // The shape of the work the seat has broken an instruction into.

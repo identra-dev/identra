@@ -12,6 +12,7 @@ use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use portable_pty::{CommandBuilder, MasterPty, NativePtySystem, PtySize, PtySystem};
 use serde::Serialize;
@@ -158,15 +159,37 @@ pub enum Event {
 /// closure that emits a window event; a test passes an mpsc sender.
 type Sink = Arc<dyn Fn(String, Event) + Send + Sync>;
 
+/// How long to wait after writing a message before pressing Enter for it.
+///
+/// This exists because of how every agent CLI tells a paste from a keystroke: it looks at what
+/// arrives in one read. A chunk that comes in all at once is a paste, and a `\r` inside a paste is
+/// inserted into the composer as a newline rather than submitting it — which is correct behaviour on
+/// their side, since pasting three lines must not fire the prompt on the first one. So a message
+/// written as `body\r` in a single write lands fully typed and unsent, waiting on a human to press
+/// enter, which is exactly what a handoff between agents must never need.
+///
+/// Writing the `\r` on its own, after a pause, is what makes it a keystroke instead of paste
+/// content. There is nothing to synchronise against here: the CLI never says "I have your text",
+/// so the gap is what does the disambiguating.
+///
+// ponytail: a fixed delay, because no agent CLI offers a signal to wait on. 150ms is well past any
+// paste window and under what a person notices. If some agent ever proves slower, the upgrade is to
+// wait for its output to go quiet rather than to make this number bigger.
+const SUBMIT_DELAY: Duration = Duration::from_millis(150);
+
 pub struct TerminalManager {
-    terminals: Mutex<HashMap<String, Terminal>>,
+    /// Shared rather than owned outright so [`send_message`](Self::send_message) can hand the map to
+    /// the short-lived thread that presses Enter. That thread must outlive the call that spawned it,
+    /// and it must not hold the lock across its own sleep, or one message would stall every other
+    /// node's output for as long as it waited.
+    terminals: Arc<Mutex<HashMap<String, Terminal>>>,
     sink: Sink,
 }
 
 impl TerminalManager {
     pub fn new(sink: Sink) -> Self {
         Self {
-            terminals: Mutex::new(HashMap::new()),
+            terminals: Arc::new(Mutex::new(HashMap::new())),
             sink,
         }
     }
@@ -292,11 +315,44 @@ impl TerminalManager {
     }
 
     /// Send keystrokes / bytes to the terminal's stdin.
+    ///
+    /// This is the raw path, and it is what the on-screen terminal uses for every key the user
+    /// presses. Anything sending a whole message on someone's behalf wants
+    /// [`send_message`](Self::send_message) instead.
     pub fn input(&self, id: &str, data: &[u8]) -> Result<(), Error> {
         let mut terms = self.terminals.lock().unwrap();
         let term = terms.get_mut(id).ok_or(Error::NotFound)?;
         term.writer.write_all(data)?;
         term.writer.flush()?;
+        Ok(())
+    }
+
+    /// Type a message into the agent running here and press Enter for it.
+    ///
+    /// This is how anything other than a human puts words in front of an agent: the command bar
+    /// dispatching an instruction, a peer's mail nudge arriving over a wire. Every one of those has
+    /// to actually submit, because an agent whose prompt is full and unsent is an agent waiting on a
+    /// person, and the entire point of a canvas is that the handoffs do not.
+    ///
+    /// The Enter is a second write after [`SUBMIT_DELAY`], which is the whole trick, and the reason
+    /// callers must not just append `\r` themselves. See that constant for why.
+    ///
+    /// Returns as soon as the body is written. The Enter is left to a thread so that neither a Tauri
+    /// command nor an async bus handler is parked for a sixth of a second on every message, and a
+    /// failure to deliver it is not reported: the body landing is what says the node was there, and
+    /// a node that disappears in the gap has bigger problems than an unsent newline.
+    pub fn send_message(&self, id: &str, text: &str) -> Result<(), Error> {
+        self.input(id, text.as_bytes())?;
+
+        let terminals = Arc::clone(&self.terminals);
+        let id = id.to_string();
+        std::thread::spawn(move || {
+            std::thread::sleep(SUBMIT_DELAY);
+            if let Some(term) = terminals.lock().unwrap().get_mut(&id) {
+                let _ = term.writer.write_all(b"\r");
+                let _ = term.writer.flush();
+            }
+        });
         Ok(())
     }
 
@@ -490,6 +546,61 @@ mod tests {
                 .map_err(|e| e.to_string())
                 .unwrap_err(),
             "terminal not found"
+        );
+    }
+
+    /// A message sent on someone's behalf has to submit itself.
+    ///
+    /// This is the bug that made every handoff wait on a human: the command bar and the peer nudge
+    /// both wrote `body\r` in one go, an agent CLI reads a single chunk as a paste, and a `\r` in a
+    /// paste is a newline in the composer rather than a send. The instruction arrived fully typed
+    /// into the agent's prompt and sat there.
+    ///
+    /// `read` is the smallest thing that can tell the difference, and that is why it is the test:
+    /// it blocks until a line is actually terminated, so it prints only if the Enter really landed
+    /// as a keystroke. Nothing about the body reaching the terminal proves that. Send the same text
+    /// as one `input` call with a trailing `\r` and a shell still accepts it — a shell is not fussy
+    /// about paste — so this asserts the property at the level that can be asserted here: that
+    /// `send_message` submits, and that what the agent receives is the line without extra newlines
+    /// welded to either end.
+    #[test]
+    fn a_sent_message_presses_enter_for_itself() {
+        let (tx, rx) = mpsc::channel();
+        let mgr = TerminalManager::new(Arc::new(move |_id, event: Event| {
+            let _ = tx.send(event);
+        }));
+
+        mgr.start(
+            "seat".into(),
+            "sh",
+            &["-c".into(), "read line; echo \"SUBMITTED:[$line]\"".into()],
+            None,
+            &[],
+            24,
+            80,
+        )
+        .expect("spawn sh");
+
+        // The shell needs its `read` running before anything is typed at it, the same beat the app
+        // waits for a CLI to draw its first screen.
+        std::thread::sleep(Duration::from_millis(300));
+        mgr.send_message("seat", "ship the thing").expect("send");
+
+        let mut seen = String::new();
+        let deadline = Duration::from_secs(5);
+        while let Ok(event) = rx.recv_timeout(deadline) {
+            if let Event::Output(out) = event {
+                seen.push_str(&String::from_utf8_lossy(&out.data));
+                if seen.contains("SUBMITTED:") {
+                    break;
+                }
+            }
+        }
+
+        assert!(
+            seen.contains("SUBMITTED:[ship the thing]"),
+            "the message has to submit itself, and arrive whole with nothing welded to either end. \
+             got: {seen:?}"
         );
     }
 
