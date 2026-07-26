@@ -1,13 +1,15 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Core defaults: the window can invoke Identra's commands and listen for terminal output events.",
+  "description": "Core defaults, plus the two window permissions Identra needs to close itself. core:window:default is read-only: it grants is-closable but not close, and not destroy, so without these two the app cannot be quit from inside itself at all.",
   "windows": [
     "main"
   ],
   "permissions": [
     "core:default",
     "dialog:allow-open",
-    "updater:default"
+    "updater:default",
+    "core:window:allow-close",
+    "core:window:allow-destroy"
   ]
 }

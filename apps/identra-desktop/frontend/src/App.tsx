@@ -282,6 +282,7 @@ export default function App() {
     void devCommand().then(setDevCmd, () => setDevCmd(null));
   }, []);
 
+
   // The whole board, from the refs, so a save always writes a consistent nodes+edges pair.
   const snapshot = useCallback(
     () => ({
@@ -315,6 +316,37 @@ export default function App() {
       setSaveError(String(e));
     }
   }, [snapshot]);
+
+  // Back to the picker, which had no way in from here at all.
+  //
+  // The workspace menu could swap you to another workspace but never out to the list, so the home
+  // screen was somewhere you passed through once at launch and could not return to. Getting back to
+  // it meant restarting the app, which is a strange thing to have to do to see a list of your own
+  // projects.
+  //
+  // Everything this clears is deliberate. The nodes and edges go because the next thing rendered is
+  // the picker and stale ones would flash up under whatever is opened next. The seat goes because it
+  // names a PTY belonging to the workspace being left. What does not happen here is killing the
+  // agents: they are this workspace's processes and they keep running, the same as they do while you
+  // are looking at another node, so coming back finds them where you left them.
+  const goHome = useCallback(async () => {
+    // The board on screen may be newer than the board on disk. Leaving is exactly the moment that
+    // matters, and unlike closing there is no bound needed: nothing is waiting on it and the picker
+    // can afford one write.
+    await saveNow().catch(() => {});
+    setWorkspace(null);
+    setNodes([]);
+    setEdges([]);
+    nodesRef.current = [];
+    edgesRef.current = [];
+    seatRef.current = null;
+    setSeat(null);
+    setSeatAgent(null);
+    setFocused(null);
+    setPanelOpen(false);
+    setFilesOpen(false);
+    setSettingsOpen(false);
+  }, [saveNow]);
 
   // Debounced atomic save. The engine writes atomically; we just avoid thrashing on drag.
   const scheduleSave = useCallback(() => {
@@ -470,6 +502,15 @@ export default function App() {
   // not start a second save or, worse, race two destroys; and whatever the save does, the window
   // has to actually go, because an app that refuses to close is holding its user hostage over a
   // write they cannot see. A tester on macOS hit exactly that wedge.
+  // What to say when the window refuses to go. Shares the save banner because it is the same kind
+  // of message — something the app cannot fix, that the user is the only one who can act on, and
+  // that must stay on screen rather than being mentioned once.
+  const reportStuck = useCallback((e: unknown) => {
+    setSaveError(
+      `Identra could not close itself: ${String(e)}. Close the window from your desktop instead.`,
+    );
+  }, []);
+
   const closing = useRef(false);
   useEffect(() => {
     const win = getCurrentWindow();
@@ -480,7 +521,7 @@ export default function App() {
       // stayed latched and every close from then on was refused: the window could not be shut at
       // all and the only way out was killing the process.
       if (closing.current) {
-        void win.destroy();
+        void win.destroy().catch(reportStuck);
         return;
       }
       if (!unsaved.current) return;
@@ -494,12 +535,30 @@ export default function App() {
         saveNow().catch(() => {}),
         new Promise((resolve) => setTimeout(resolve, CLOSE_FLUSH_MAX_MS)),
       ]);
-      void win.destroy();
+      // Same story as the button: a destroy that is refused used to vanish, and this is the path a
+      // title bar cross and alt+F4 both come down. The window stayed open, the flag stayed latched,
+      // and nothing anywhere said a permission had been denied.
+      void win.destroy().catch(reportStuck);
     });
     return () => {
       void pending.then((unlisten) => unlisten());
     };
-  }, [saveNow]);
+  }, [saveNow, reportStuck]);
+
+  // Ask the window to close, and say so out loud if it will not.
+  //
+  // The `.catch` is the whole reason this bug survived several rounds of being fixed. Window close
+  // and destroy are permissioned in Tauri, `core:window:default` grants neither, and every call
+  // site here was `void win.close()` with nothing watching. So the rejection went nowhere: the
+  // button did nothing, alt+F4 did nothing, and there was no error anywhere to say why. A silent
+  // failure on the one control that has to work is worse than a loud one, and this is now loud.
+  const closeIdentra = useCallback(async () => {
+    try {
+      await getCurrentWindow().close();
+    } catch (e) {
+      reportStuck(e);
+    }
+  }, [reportStuck]);
 
   // Ctrl+Q / Cmd+Q, because that is the key people press to leave an app and Identra was not
   // listening for it.
@@ -519,11 +578,11 @@ export default function App() {
       if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
       e.preventDefault();
       e.stopPropagation();
-      void getCurrentWindow().close();
+      void closeIdentra();
     };
     window.addEventListener("keydown", key, true);
     return () => window.removeEventListener("keydown", key, true);
-  }, []);
+  }, [closeIdentra]);
 
   const onNodesChange = useCallback(
     (changes: NodeChange<FNode>[]) => {
@@ -1069,7 +1128,10 @@ export default function App() {
 
   if (!workspace) {
     return (
-      <WorkspacePicker onOpen={(w) => void openWorkspace(w)} />
+      <WorkspacePicker
+        onOpen={(w) => void openWorkspace(w)}
+        onClose={() => void closeIdentra()}
+      />
     );
   }
 
@@ -1289,22 +1351,23 @@ export default function App() {
           >
             Settings
           </button>
-          {/* The way out, inside the product.
-              Identra had none. Every way of closing it was something the window manager provided —
-              a title bar cross, alt+F4 — and when a desktop does not draw one, or draws one the
-              window does not get, there was nothing left: the app could only be ended from a
-              process list. An application that cannot be quit from inside itself is not finished,
-              whatever the window manager is doing.
-              `close()` and not `destroy()`, deliberately: it raises the same close request the
-              title bar would, so this goes through the flush that gets the canvas onto disk rather
-              than around it. One exit path, and this is a second door onto it. */}
+          {/* Two different exits, and they were one control until someone pointed out they are
+              not the same act at all. Leaving a workspace is going back to the list of your
+              projects; leaving Identra is ending every agent on the machine. Putting both behind
+              one word called Quit meant the smaller one was unreachable and the bigger one was a
+              surprise. */}
           <button
-            className="identra-topbar__btn identra-topbar__btn--quit"
-            onClick={() => void getCurrentWindow().close()}
-            title={`Close Identra and stop its agents (${MOD_LABEL.replace("K", "Q")})`}
+            className="identra-topbar__btn"
+            onClick={() => void goHome()}
+            title="Back to your workspaces. The agents in this one keep running."
           >
-            Quit
+            Home
           </button>
+          {/* Closing Identra is not offered here, only Home. Inside a workspace the thing you
+              usually want is the other workspace, and the button that ends every agent on the
+              machine should not sit one pixel from the one that lists your projects. It lives on
+              the home screen, which is where leaving is what you came to do. ctrl+Q still works
+              from anywhere for people who know it. */}
         </div>
       </div>
 

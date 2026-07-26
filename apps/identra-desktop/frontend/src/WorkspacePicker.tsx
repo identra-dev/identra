@@ -17,8 +17,14 @@ import {
 
 export default function WorkspacePicker({
   onOpen,
+  onClose,
 }: {
   onOpen: (workspace: WorkspaceMeta) => void;
+  // Close Identra itself. It lives on this screen rather than in a workspace, because leaving is
+  // what this screen is for: inside a workspace the thing you usually want is a different
+  // workspace, and the control that ends every agent on the machine should not sit next to the one
+  // that lists your projects.
+  onClose: () => void;
 }) {
   const [workspaces, setWorkspaces] = useState<WorkspaceMeta[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -119,6 +125,16 @@ export default function WorkspacePicker({
             disabled={busy}
           >
             {busy && !cloning ? "Working..." : "New workspace"}
+          </button>
+          {/* Last in the row and quiet until you reach for it. Everything else here opens
+              something; this is the one that ends the session, so it should be findable without
+              being the brightest thing on screen. */}
+          <button
+            className="identra-home__act identra-home__act--close"
+            onClick={onClose}
+            title="Close Identra and stop every agent"
+          >
+            Close Identra
           </button>
           <button
             className="identra-home__act identra-home__act--primary"

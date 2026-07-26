@@ -577,6 +577,18 @@ body {
   opacity: 0.6;
   cursor: default;
 }
+/* Ending the session, set apart from the three controls that start one. Dimmer than its
+   neighbours until you point at it, and red only then: it has to be findable without competing
+   with the thing most people came to this screen to do. */
+.identra-home__act--close {
+  margin-right: 4px;
+  color: #b6b6b6;
+}
+.identra-home__act--close:hover:not(:disabled) {
+  border-color: #c0392b;
+  background: #c0392b;
+  color: #fff;
+}
 .identra-home__act--primary {
   background: var(--yaru-orange);
   border-color: var(--yaru-orange);
