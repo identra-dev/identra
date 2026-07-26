@@ -5,6 +5,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import logo from "./assets/identra.png";
 import BoardPreview from "./BoardPreview";
+import NameWorkspace from "./NameWorkspace";
 import {
   workspaceClone,
   workspaceCreate,
@@ -49,11 +50,18 @@ export default function WorkspacePicker({
     }
   };
 
-  const create = async () => {
+  // Ask what it is called, then make it. The engine has always taken a title and nothing ever
+  // passed one, so every new workspace was untitled-workspace, then untitled-workspace-2 — fine
+  // for the first, useless by the third, since this very screen is a list of them.
+  const [naming, setNaming] = useState(false);
+  const create = async (title: string) => {
+    setNaming(false);
     setBusy(true);
     setError(null);
     try {
-      onOpen(await workspaceCreate());
+      // Empty means "you pick", which is the engine's own default and exactly what happened before
+      // anyone was asked.
+      onOpen(await workspaceCreate(title === "" ? undefined : title));
     } catch (e) {
       setError(String(e));
       setBusy(false);
@@ -84,6 +92,12 @@ export default function WorkspacePicker({
 
   return (
     <div className="identra-home">
+      {naming && (
+        <NameWorkspace
+          onCancel={() => setNaming(false)}
+          onName={(name) => void create(name)}
+        />
+      )}
       <header className="identra-home__nav">
         <img className="identra-logo identra-home__logo" src={logo} alt="" />
         <span className="identra-home__brand">Identra</span>
@@ -101,7 +115,7 @@ export default function WorkspacePicker({
           </button>
           <button
             className="identra-home__act"
-            onClick={() => void create()}
+            onClick={() => setNaming(true)}
             disabled={busy}
           >
             {busy && !cloning ? "Working..." : "New workspace"}

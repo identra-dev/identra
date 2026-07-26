@@ -10,6 +10,7 @@ import {
   workspaceRename,
   type WorkspaceMeta,
 } from "./api";
+import NameWorkspace from "./NameWorkspace";
 
 // The way out of the workspace you are in. Without this the picker was a one way door: you chose at
 // launch and the only way to a different workspace was to quit.
@@ -33,6 +34,7 @@ export default function WorkspaceMenu({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(workspace.title);
   const [error, setError] = useState<string | null>(null);
+  const [naming, setNaming] = useState(false);
   const root = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -99,6 +101,21 @@ export default function WorkspaceMenu({
 
   return (
     <div className="identra-ws" ref={root}>
+      {naming && (
+        <NameWorkspace
+          onCancel={() => setNaming(false)}
+          onName={async (name) => {
+            setNaming(false);
+            try {
+              // Empty is "you pick", which is the engine's own default and what every new
+              // workspace got before anybody was asked.
+              onOpen(await workspaceCreate(name === "" ? undefined : name));
+            } catch (e) {
+              setError(String(e));
+            }
+          }}
+        />
+      )}
       {editing ? (
         <input
           className="identra-ws__edit"
@@ -181,13 +198,9 @@ export default function WorkspaceMenu({
               Rename this one
             </button>
             <button
-              onClick={async () => {
+              onClick={() => {
                 setOpen(false);
-                try {
-                  onOpen(await workspaceCreate());
-                } catch (e) {
-                  setError(String(e));
-                }
+                setNaming(true);
               }}
             >
               New empty workspace

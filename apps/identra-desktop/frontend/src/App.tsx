@@ -32,7 +32,6 @@ import WorkPanel from "./WorkPanel";
 import WorkspaceMenu from "./WorkspaceMenu";
 import CommandBar, { MOD_LABEL, type DispatchState } from "./CommandBar";
 import FocusView from "./FocusView";
-import Greeting from "./Greeting";
 import { REFIT_EVENT } from "./attachTerminal";
 import WallpaperPicker from "./WallpaperPicker";
 import { AgentIcon } from "./icons";
@@ -501,6 +500,30 @@ export default function App() {
       void pending.then((unlisten) => unlisten());
     };
   }, [saveNow]);
+
+  // Ctrl+Q / Cmd+Q, because that is the key people press to leave an app and Identra was not
+  // listening for it.
+  //
+  // Every exit this app had came from the window manager: a cross on a title bar, or alt+F4 handled
+  // by the desktop. Neither is something an app can count on. A desktop that draws no decorations,
+  // a window that never gets the keystroke because a terminal inside it swallowed it first, and the
+  // only way out left is a process list — which is where this actually ended up.
+  //
+  // Capturing on window, same as the command bar's shortcut and for the same reason: every node on
+  // this canvas is a terminal that takes keys first, and a quit shortcut that only works when
+  // nothing has focus is not a quit shortcut. It raises the ordinary close request, so the flush
+  // and the agent teardown are the same ones the button and the title bar go through.
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== "q" && e.key !== "Q") return;
+      if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+      e.preventDefault();
+      e.stopPropagation();
+      void getCurrentWindow().close();
+    };
+    window.addEventListener("keydown", key, true);
+    return () => window.removeEventListener("keydown", key, true);
+  }, []);
 
   const onNodesChange = useCallback(
     (changes: NodeChange<FNode>[]) => {
@@ -1045,7 +1068,9 @@ export default function App() {
   const seatName = seat === null ? null : seatAgent;
 
   if (!workspace) {
-    return <WorkspacePicker onOpen={(w) => void openWorkspace(w)} />;
+    return (
+      <WorkspacePicker onOpen={(w) => void openWorkspace(w)} />
+    );
   }
 
   return (
@@ -1148,10 +1173,6 @@ export default function App() {
           control you reach for to go somewhere writable. Whatever height the message wraps to, the
           bar now begins under it. */}
       <div className="identra-topstack">
-        {/* Hello, before anything else in the stack. It is the first thing that should reach you on
-            opening the app, and it is gone within a few seconds, so nothing below it is displaced
-            for long. */}
-        <Greeting />
         {saveError !== null && (
           // It stays until a save works. A canvas that is not on disk is not a thing to mention
           // once and then hide: every drag from here is work that will not be there tomorrow, and
@@ -1267,6 +1288,22 @@ export default function App() {
             title="Settings for this machine"
           >
             Settings
+          </button>
+          {/* The way out, inside the product.
+              Identra had none. Every way of closing it was something the window manager provided —
+              a title bar cross, alt+F4 — and when a desktop does not draw one, or draws one the
+              window does not get, there was nothing left: the app could only be ended from a
+              process list. An application that cannot be quit from inside itself is not finished,
+              whatever the window manager is doing.
+              `close()` and not `destroy()`, deliberately: it raises the same close request the
+              title bar would, so this goes through the flush that gets the canvas onto disk rather
+              than around it. One exit path, and this is a second door onto it. */}
+          <button
+            className="identra-topbar__btn identra-topbar__btn--quit"
+            onClick={() => void getCurrentWindow().close()}
+            title={`Close Identra and stop its agents (${MOD_LABEL.replace("K", "Q")})`}
+          >
+            Quit
           </button>
         </div>
       </div>

@@ -859,77 +859,147 @@ body {
 }
 
 /* Hello.
-   Quiet on purpose: this is a greeting, not a notification, so it gets the orange only on the name
-   itself and no border, no icon, and nothing to dismiss. It fades on its own after a few seconds.
-   Sitting first in the topstack means it arrives where the eye already is on opening the window. */
-.identra-greeting {
-  margin: 12px 12px 0;
-  padding: 6px 14px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text);
-  background: var(--panel);
-  border-radius: 999px;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+   The whole window, blurred, behind one line in the middle of it. This is the first second of the
+   app and there is nothing to do in it, so it can be a moment rather than a chip in a corner.
+   Nothing here is clickable and nothing waits: it fades on its own and takes the blur with it,
+   which is why pointer-events are off — a greeting must never be a thing standing between someone
+   and the canvas, even for the four seconds it is up. */
+.identra-greet {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  background: rgba(20, 20, 20, 0.42);
+  backdrop-filter: blur(14px) saturate(120%);
+  -webkit-backdrop-filter: blur(14px) saturate(120%);
   animation: identra-greet 4.2s ease-in-out forwards;
 }
-/* Up and in, hold, then out. The hold is most of it: the movement is there to catch the eye once,
-   not to be watched. Matches GREETING_MS in Greeting.tsx — if one changes, change the other, or the
-   line either vanishes mid-fade or sits there fully opaque and then disappears. */
+.identra-greet__text {
+  margin: 0;
+  padding: 0 24px;
+  text-align: center;
+  font-size: clamp(26px, 4.4vw, 44px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  text-shadow: 0 2px 24px rgba(0, 0, 0, 0.5);
+  animation: identra-greet-text 4.2s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+/* In, hold, out. The hold is most of it: the movement catches the eye once, it is not there to be
+   watched. Both keyframes run 4.2s to match GREETING_MS in Greeting.tsx — change one, change the
+   others, or the line either vanishes mid-fade or sits fully opaque and then disappears. */
 @keyframes identra-greet {
   0% {
     opacity: 0;
-    transform: translateY(-6px);
   }
-  8% {
+  10% {
     opacity: 1;
-    transform: translateY(0);
   }
-  82% {
+  78% {
     opacity: 1;
-    transform: translateY(0);
   }
   100% {
     opacity: 0;
-    transform: translateY(-4px);
+  }
+}
+@keyframes identra-greet-text {
+  0% {
+    opacity: 0;
+    transform: translateY(14px) scale(0.98);
+  }
+  12% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  78% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-10px) scale(1.01);
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  /* The fade is decoration; the words are the content. Someone who has asked for less movement
-     still gets the greeting, it just appears and leaves without travelling. */
-  .identra-greeting {
-    animation: none;
+  /* The travel is decoration; the words are the content. Someone who asked for less movement still
+     gets the greeting and the fade, just without anything sliding. */
+  .identra-greet__text {
+    animation-name: identra-greet;
   }
 }
 
-/* The one question Identra asks about the person using it, asked once. Centred like the install
-   panel because it is the same kind of moment: the app has nothing to show yet and is talking to
-   you rather than about the canvas. */
-.identra-hello {
+/* The one question Identra asks about the person using it, asked once, over the same blurred field
+   the greeting uses. Nothing else is reachable while it is up, which is the point: it is one line
+   long, it has a way out in it, and it never appears again. */
+.identra-ask__scrim {
   position: fixed;
-  left: 50%;
-  top: 40%;
-  transform: translate(-50%, -50%);
-  width: 380px;
-  max-width: calc(100vw - 48px);
-  padding: 22px 24px;
-  background: var(--panel);
-  border: 1px solid var(--panel-edge);
-  border-radius: 10px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
-  text-align: center;
+  inset: 0;
+  z-index: 31;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(20, 20, 20, 0.5);
+  backdrop-filter: blur(16px) saturate(120%);
+  -webkit-backdrop-filter: blur(16px) saturate(120%);
+  animation: identra-ask-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
-.identra-hello__lead {
-  margin: 0 0 14px;
-  font-size: 15px;
-  font-weight: 600;
+@keyframes identra-ask-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.identra-ask {
+  width: 400px;
+  max-width: calc(100vw - 48px);
+  padding: 26px 26px 20px;
+  background: rgba(44, 44, 44, 0.86);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+  text-align: center;
+  animation: identra-ask-rise 0.36s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes identra-ask-rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .identra-ask {
+    animation-name: identra-ask-in;
+  }
+}
+.identra-ask__lead {
+  margin: 0 0 6px;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
   color: var(--text);
 }
-.identra-hello__row {
+/* What it is for and where it goes, said before anyone types rather than after. A box asking for
+   your name with no explanation reads as a signup, which is the one thing this is not. */
+.identra-ask__sub {
+  margin: 0 0 16px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #a8a8a8;
+}
+.identra-ask__row {
   display: flex;
   gap: 8px;
 }
-.identra-hello__input {
+.identra-ask__input {
   flex: 1;
   min-width: 0;
   font: inherit;
@@ -940,11 +1010,11 @@ body {
   border-radius: 6px;
   padding: 8px 10px;
 }
-.identra-hello__input:focus {
+.identra-ask__input:focus {
   outline: 2px solid var(--yaru-orange);
   outline-offset: -1px;
 }
-.identra-hello__go {
+.identra-ask__go {
   font: inherit;
   font-size: 13px;
   font-weight: 600;
@@ -956,16 +1026,16 @@ body {
   cursor: pointer;
   white-space: nowrap;
 }
-.identra-hello__go:disabled {
+.identra-ask__go:disabled {
   opacity: 0.45;
   cursor: default;
 }
-.identra-hello__go:not(:disabled):hover {
+.identra-ask__go:not(:disabled):hover {
   filter: brightness(1.08);
 }
 /* The way out, styled as a way out rather than as a second choice: no fill, no border, and it sits
    under the row. Easy to find, impossible to press by accident. */
-.identra-hello__skip {
+.identra-ask__skip {
   margin-top: 12px;
   font: inherit;
   font-size: 12px;
@@ -975,7 +1045,7 @@ body {
   cursor: pointer;
   text-decoration: underline;
 }
-.identra-hello__skip:hover {
+.identra-ask__skip:hover {
   color: var(--text);
 }
 
@@ -1008,6 +1078,16 @@ body {
 .identra-topbar__btn[data-on="true"] {
   background: var(--yaru-orange);
   border-color: var(--yaru-orange);
+}
+/* Quit sits with the other controls but reads as the end of the row: a little space before it, and
+   red only on hover. It is one click and it stops every agent on the canvas, so it should not be
+   the brightest thing in the bar and it should not be reachable by a slip either. */
+.identra-topbar__btn--quit {
+  margin-left: 6px;
+}
+.identra-topbar__btn--quit:hover {
+  background: #c0392b;
+  border-color: #c0392b;
 }
 
 /* The work panel. Docked right, over the canvas: you read it while watching the nodes, so it must

@@ -698,6 +698,15 @@ pub fn run() {
                 .title("Identra")
                 .inner_size(1280.0, 820.0)
                 .min_inner_size(800.0, 560.0)
+                // Ask for a title bar out loud rather than relying on the default being one.
+                //
+                // This is the window manager's close button, and someone reported having none: no
+                // cross, and alt+F4 doing nothing, which left a process list as the only way to
+                // end the app. Whatever a given desktop does with this request, Identra now also
+                // carries its own Quit in the top bar and answers ctrl+Q, because an application
+                // that can only be closed by something outside itself is not finished.
+                .decorations(true)
+                .closable(true)
                 .on_navigation(|url| match url.scheme() {
                     // The app itself, packaged, and its asset protocol.
                     "tauri" | "asset" => true,

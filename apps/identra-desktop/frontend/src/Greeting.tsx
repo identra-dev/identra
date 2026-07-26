@@ -98,9 +98,12 @@ export default function Greeting() {
   if (phase.at === "loading" || phase.at === "quiet") return null;
 
   if (phase.at === "greeting") {
+    // The whole window, blurred behind one line. It is the first second of the app and there is
+    // nothing to do in it, so it can afford to be a moment rather than a notification in a corner.
+    // Nothing is clickable and nothing waits: it fades on its own, and the blur goes with it.
     return (
-      <div className="identra-greeting" role="status">
-        {phase.text}
+      <div className="identra-greet" role="status">
+        <p className="identra-greet__text">{phase.text}</p>
       </div>
     );
   }
@@ -123,41 +126,46 @@ export default function Greeting() {
   };
 
   return (
-    <div className="identra-hello" role="dialog" aria-label="What to call you">
-      <p className="identra-hello__lead">What should I call you?</p>
-      <form
-        className="identra-hello__row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void save(typed.trim());
-        }}
-      >
-        <input
-          className="identra-hello__input"
-          value={typed}
-          onChange={(e) => setTyped(e.target.value)}
-          placeholder={suggestion.current}
-          aria-label="What to call you"
-          maxLength={40}
-          autoFocus
-        />
-        <button
-          className="identra-hello__go"
-          type="submit"
-          disabled={typed.trim() === ""}
+    <div className="identra-ask__scrim">
+      <div className="identra-ask" role="dialog" aria-label="What to call you">
+        <p className="identra-ask__lead">What should I call you?</p>
+        <p className="identra-ask__sub">
+          Identra says hello with it when it opens. It stays on this machine.
+        </p>
+        <form
+          className="identra-ask__row"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void save(typed.trim());
+          }}
         >
-          That&apos;s me
+          <input
+            className="identra-ask__input"
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            placeholder={suggestion.current}
+            aria-label="What to call you"
+            maxLength={40}
+            autoFocus
+          />
+          <button
+            className="identra-ask__go"
+            type="submit"
+            disabled={typed.trim() === ""}
+          >
+            That&apos;s me
+          </button>
+        </form>
+        {/* The way out has to be as easy as the way through, or this stops being a nicety and
+            starts being a form. Declining is remembered, so it is asked once and never again. */}
+        <button
+          className="identra-ask__skip"
+          type="button"
+          onClick={() => void save("")}
+        >
+          Rather not
         </button>
-      </form>
-      {/* The way out has to be as easy as the way through, or this stops being a nicety and starts
-          being a form. Declining is remembered, so it is asked once and never again. */}
-      <button
-        className="identra-hello__skip"
-        type="button"
-        onClick={() => void save("")}
-      >
-        Rather not
-      </button>
+      </div>
     </div>
   );
 }
