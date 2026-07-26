@@ -532,11 +532,127 @@ fn cosine(a: &[f32], b: &[f32]) -> f32 {
     dot / (na.sqrt() * nb.sqrt())
 }
 
+/// How alike two facts have to read before the second one is not worth its tokens. Jaccard over
+/// word trigrams, so 0.6 means most of one's phrasing appears in the other.
+///
+/// Tuned to catch restatement, not topic. "we dropped redis for postgres listen/notify" against
+/// "the job queue moved off redis to postgres listen/notify" scores well over this; two different
+/// decisions that both mention postgres score far under it. Erring low here costs a few tokens;
+/// erring high loses a fact, so the threshold sits where it does deliberately.
+const NEAR_DUPLICATE: f32 = 0.6;
+
+/// Word trigrams, lowercased. Short texts fall back to their words, so a fact of one or two words
+/// still has something to compare.
+fn shingles(text: &str) -> std::collections::HashSet<String> {
+    let words: Vec<String> = text
+        .split_whitespace()
+        .map(|w| {
+            w.trim_matches(|c: char| !c.is_alphanumeric())
+                .to_lowercase()
+        })
+        .filter(|w| !w.is_empty())
+        .collect();
+    if words.len() < 3 {
+        return words.into_iter().collect();
+    }
+    words.windows(3).map(|w| w.join(" ")).collect()
+}
+
+/// Drop facts that restate one already kept, preserving order.
+///
+/// A memory store accumulates the same decision in several wordings: three agents each record that
+/// the queue moved to postgres, in three sentences, and every one of them is a real distinct row
+/// because the content hash that dedupes exact repeats cannot see that they mean the same thing.
+/// Injecting all three into every agent's context at connect spends tokens to say one thing three
+/// times, and it does it once per agent per session, which is where this actually costs.
+///
+/// Lexical rather than semantic on purpose. Connect deliberately opens the store without an
+/// embedder so the handshake never waits on the model, so there are no vectors here to cluster and
+/// this has to work without them. Shingle overlap catches restatement, which is the shape that
+/// accumulates, and it costs a hash set per fact against a list already capped at twenty.
+///
+/// The first wording of a thing wins, and the caller hands these in newest first, so what survives
+/// is the most recent way the project put it.
+pub fn drop_near_duplicates(facts: Vec<String>) -> Vec<String> {
+    let mut kept: Vec<(String, std::collections::HashSet<String>)> = Vec::new();
+    for fact in facts {
+        let shape = shingles(&fact);
+        if shape.is_empty() {
+            continue;
+        }
+        let redundant = kept.iter().any(|(_, seen)| {
+            let overlap = shape.intersection(seen).count() as f32;
+            let union = shape.union(seen).count() as f32;
+            union > 0.0 && overlap / union >= NEAR_DUPLICATE
+        });
+        if !redundant {
+            kept.push((fact, shape));
+        }
+    }
+    kept.into_iter().map(|(fact, _)| fact).collect()
+}
+
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod dedup_tests {
+    use super::drop_near_duplicates;
+
+    /// This runs on every agent's connect payload, so what it drops and what it keeps is a token
+    /// bill on one side and a fact the project loses on the other.
+    #[test]
+    fn restatement_goes_and_distinct_decisions_stay() {
+        let facts = vec![
+            "The job queue moved off redis to postgres listen/notify".to_string(),
+            // The same decision, recorded by another agent in its own words. This is the case that
+            // actually accumulates, and the one worth paying a hash set per fact to catch.
+            "the job queue moved off redis to postgres listen notify.".to_string(),
+            // Also about postgres, and not the same fact at all. Topic overlap must not read as
+            // restatement or the store loses real decisions.
+            "Postgres runs in docker for local development".to_string(),
+            "The API issues JWT bearer tokens rather than server side sessions".to_string(),
+        ];
+        let kept = drop_near_duplicates(facts);
+        assert_eq!(
+            kept,
+            vec![
+                "The job queue moved off redis to postgres listen/notify".to_string(),
+                "Postgres runs in docker for local development".to_string(),
+                "The API issues JWT bearer tokens rather than server side sessions".to_string(),
+            ],
+            "the restatement goes, everything that says something new stays"
+        );
+    }
+
+    #[test]
+    fn order_is_kept_and_short_facts_survive() {
+        // Newest first is what the caller hands in, so the first wording of a thing is the most
+        // recent way the project put it, and that is the one to keep.
+        let kept = drop_near_duplicates(vec![
+            "newest".to_string(),
+            "middle".to_string(),
+            "oldest".to_string(),
+        ]);
+        assert_eq!(kept, vec!["newest", "middle", "oldest"]);
+
+        // Under three words there are no trigrams. Falling back to the words themselves is what
+        // stops a short fact hashing to nothing and being silently dropped.
+        let kept = drop_near_duplicates(vec![
+            "ship it".to_string(),
+            "ship it".to_string(),
+            "rust only".to_string(),
+        ]);
+        assert_eq!(kept, vec!["ship it", "rust only"]);
+
+        // Nothing in, nothing out, and a fact with no words in it is not a fact.
+        assert!(drop_near_duplicates(Vec::new()).is_empty());
+        assert!(drop_near_duplicates(vec!["   ".to_string()]).is_empty());
+    }
 }
 
 #[cfg(test)]

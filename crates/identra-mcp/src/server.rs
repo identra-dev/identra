@@ -255,7 +255,14 @@ const CONNECT_FACTS: usize = 20;
 /// A byte budget on the injected facts, so a project that has learned a great deal cannot bloat
 /// every agent's context at connect. The newest facts are kept and the oldest fall off first,
 /// which is the same bias recall already has.
-const CONNECT_BYTE_CAP: usize = 4096;
+///
+/// Halved from 4096, and the reason is arithmetic rather than taste. This block is paid once per
+/// agent per session, so a canvas of five nodes was spending up to 20KB of context restating the
+/// project before anyone typed anything, on top of the workspace guide every one of them also
+/// reads. What that budget buys past the first page is the oldest facts in the window, which are
+/// the ones an agent is least likely to need and can still ask for with search_memory. The tool is
+/// right there; the injection only has to cover what is worth having unasked.
+const CONNECT_BYTE_CAP: usize = 2048;
 
 /// The instructions the MCP server hands back at `initialize`. This is the whole wedge in one
 /// field: a client that surfaces initialize instructions drops its agent into the session already
@@ -265,11 +272,19 @@ const CONNECT_BYTE_CAP: usize = 4096;
 /// other agents and read by this one, so a fact that happens to read like an instruction ("always
 /// use X") must not be obeyed as if the user had said it. The header says so in as many words.
 fn connect_instructions(project_dir: &std::path::Path) -> String {
+    // Short, because the sentence that used to be here telling the agent to call add_memory,
+    // list_memory and search_memory is already in those three tools' own descriptions, which the
+    // client put in context on the same handshake this text arrives on. What this field is for is
+    // the facts below it: the thing no tool description can contain because it is different in
+    // every project.
     let base = "You are connected to an Identra workspace, which keeps one shared memory across \
-        every agent that works here. Record durable decisions and rejected approaches with \
-        add_memory, and use list_memory or search_memory to check what is already known before \
-        you ask your user or redo work.";
-    let facts = recent_facts(project_dir);
+        every agent that works here.";
+    // Restatement is the shape a memory store accumulates: three agents record the same decision
+    // in three wordings, all three are distinct rows because the content hash cannot see that they
+    // mean the same thing, and injecting all three spends an agent's context saying one thing
+    // three times. Suppressed before the byte budget is applied, so what the budget buys is more
+    // distinct facts rather than more phrasings of the ones already there.
+    let facts = memory::drop_near_duplicates(recent_facts(project_dir));
     if facts.is_empty() {
         return format!("{base} Its memory is empty so far, so you are the first here.");
     }
@@ -1514,13 +1529,13 @@ mod tests {
         // happen at all. `connect_instructions` is covered on its own further down, but none of
         // those tests notice if the field stops being wired into the handshake, and that is the
         // failure worth catching here: every other test would still pass while agents quietly go
-        // back to arriving knowing nothing. Asserted against the guide text rather than a fact,
-        // because the guide is what comes back whether or not this workspace has learned anything.
+        // back to arriving knowing nothing. Asserted against the fixed header rather than a fact,
+        // because the header is what comes back whether or not this workspace has learned anything.
         assert!(
             init["instructions"]
                 .as_str()
                 .unwrap_or_default()
-                .contains("add_memory"),
+                .contains("shared memory"),
             "initialize must carry the connect instructions"
         );
 
