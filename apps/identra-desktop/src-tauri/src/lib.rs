@@ -852,24 +852,39 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building Identra")
-        // Take the agents down with the app.
+        // Closing has to mean closing.
         //
-        // Every node is a real CLI in a real PTY, and a child process does not die because its
-        // parent did. Closing the window left a codex or a claude per node still running, holding
-        // its model session and its share of the machine, invisible now that the canvas they
-        // belonged to was gone: the user's only sign of them was a process list. Worse on the way
-        // out than it sounds, because the reader threads die with the process, so nothing was even
-        // watching them any more.
+        // Two things go wrong on the way out, and they are separate. The first is the agents: every
+        // node is a real CLI in a real PTY, and a child process does not die because its parent
+        // did, so quitting left a codex or a claude per node still running and holding its model
+        // session, invisible now that the canvas they belonged to was gone.
         //
-        // Exit rather than ExitRequested: this is the last point where the state is still there to
-        // read, and killing at the request would take the agents down before a window that has not
-        // finished flushing its canvas is done with them.
+        // The second is the app itself outliving its own window, which is the one people actually
+        // feel, because the only way out of it is a process list. Identra keeps three unbounded
+        // background workers going — the context bus accepting connections, the session watcher
+        // sampling every node, and the embedding model loading — plus one child process per node.
+        // Any of them can keep a process alive or wedge a shutdown, and working out which one on a
+        // given machine is not something a user should be doing on Identra's behalf.
+        //
+        // So the answer here is not to find the culprit, it is to stop holding the vote. When the
+        // last window goes, the agents are killed and the process exits, and no background worker
+        // gets an opinion about it. Whatever the user's layout needed written is already on disk:
+        // the window flushes before it destroys itself, on a bounded wait, which is the right place
+        // for that decision because it is the only place that knows what is unsaved.
+        //
+        // Both arms, because the two events are not reliably both reached: a window destroyed from
+        // the frontend raises the request, and the plain Exit is what a signal or a platform quit
+        // comes in on. Exiting twice is not a thing that can happen.
         .run(|app, event| {
-            if matches!(event, tauri::RunEvent::Exit) {
+            if matches!(
+                event,
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+            ) {
                 let state = app.state::<AppState>();
                 for id in state.manager.ids() {
                     let _ = state.manager.kill(&id);
                 }
+                std::process::exit(0);
             }
         });
 }

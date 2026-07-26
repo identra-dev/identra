@@ -32,6 +32,7 @@ import WorkPanel from "./WorkPanel";
 import WorkspaceMenu from "./WorkspaceMenu";
 import CommandBar, { MOD_LABEL, type DispatchState } from "./CommandBar";
 import FocusView from "./FocusView";
+import { REFIT_EVENT } from "./attachTerminal";
 import WallpaperPicker from "./WallpaperPicker";
 import { AgentIcon } from "./icons";
 import { tidyPositions } from "./tidy";
@@ -1274,7 +1275,13 @@ export default function App() {
               nodeId={focused}
               title={node.data.title}
               kind={node.data.kind}
-              onClose={() => setFocused(null)}
+              onClose={() => {
+                setFocused(null);
+                // Hand the pty's size back to the node on the canvas. Closing this overlay does not
+                // change that node's box, so nothing it watches fires, and it would go on drawing
+                // an agent wrapped for a full window it is no longer in.
+                window.dispatchEvent(new Event(REFIT_EVENT));
+              }}
             />
           );
         })()}

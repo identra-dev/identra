@@ -16,6 +16,7 @@ import {
   type Memory,
   type OutputEvent,
 } from "./api";
+import { REFIT_EVENT } from "./attachTerminal";
 import { appendTail, findLocalUrl } from "./devurl";
 import { pastSnapshot } from "./reattach";
 import { AgentIcon, auraFor } from "./icons";
@@ -254,22 +255,35 @@ function AgentNodeImpl({ id, data }: NodeProps) {
         ),
     );
 
-    const ro = new ResizeObserver(() => {
+    // Same story as input: a resize racing a killed terminal rejects at the backend, and there is
+    // nothing to resize and nothing to tell the user, so it is swallowed rather than left unhandled.
+    const claimSize = () => {
       try {
         fit.fit();
-        // Same story as input: a resize racing a killed terminal rejects at the backend, and there
-        // is nothing to resize and nothing to tell the user, so it is swallowed rather than left
-        // unhandled.
         void terminalResize(id, term.rows, term.cols).catch(() => {});
       } catch {
         /* host detached mid-resize */
       }
-    });
+    };
+
+    const ro = new ResizeObserver(claimSize);
     ro.observe(host);
+
+    // Take the pty's size back when the focus view hands it over.
+    //
+    // There is one pty per node and its size is single valued, so whichever view last pushed one
+    // owns how the agent wraps every line it draws. The focus view is an overlay: opening it does
+    // not change this node's box, so nothing here fires, and it quietly re-wraps the agent to a
+    // full window. Closing it does not change this node's box either — so without this the node
+    // stays wrapped for a window it is not in, with lines running off its edge, until something
+    // else happens to resize it. Which for a node sitting still on a canvas can be never.
+    const refit = () => claimSize();
+    window.addEventListener(REFIT_EVENT, refit);
 
     return () => {
       disposed = true;
       window.clearTimeout(idleTimer);
+      window.removeEventListener(REFIT_EVENT, refit);
       ro.disconnect();
       onData.dispose();
       void unlisten.then((un) => un());

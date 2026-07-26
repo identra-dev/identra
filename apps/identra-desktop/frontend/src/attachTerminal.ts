@@ -20,6 +20,15 @@ import {
 } from "./api";
 import { pastSnapshot } from "./reattach";
 
+/// Fired when a view that was driving a pty's size lets go of it, so whatever is still showing that
+/// node can claim the size back.
+///
+/// A pty has one size and can have three views. The canvas node is the one that outlives the
+/// others, but it is also the one that cannot notice: the focus view is an overlay, so opening and
+/// closing it never changes the node's own box and never trips its ResizeObserver. Without a nudge
+/// the node is left wrapped for a window that is no longer there.
+export const REFIT_EVENT = "identra:refit";
+
 export type AttachOptions = {
   // What to call the agent in the line printed when it exits.
   kind: string;
@@ -126,13 +135,25 @@ export function useAttachedTerminal(
             ),
         );
 
-    // The pty is re-sized to whatever is showing it, so the CLI wraps to the box being read rather
-    // than to the arbitrary size it was spawned at. A resize racing a killed terminal rejects at
-    // the backend with nothing to say to anyone, so it is swallowed rather than left unhandled.
+    // The local xterm always re-fits, so what is on screen here is laid out for the box it is in.
+    // Whether that reaches the pty is a different question, and the answer is: only if this view is
+    // one you can type into.
+    //
+    // There is one pty per node and up to three views onto it — the canvas node, the focus view,
+    // and the command center pane. The pty has a single size, so every view that pushes its own is
+    // re-wrapping the agent's output for all the others. A 12px read-only pane a few hundred pixels
+    // wide would drag the CLI down to its own column count, and the node showing the same agent at
+    // full width would then be drawing text wrapped for a box it is not in. With both mounted the
+    // two observers take turns, and the agent redraws its whole TUI at a new width each time, which
+    // looks exactly like the output being corrupted.
+    //
+    // A spectator does not get to reflow what everyone else is reading. Read-only means read only.
     const ro = new ResizeObserver(() => {
       try {
         fit.fit();
-        void terminalResize(nodeId, term.rows, term.cols).catch(() => {});
+        // A resize racing a killed terminal rejects at the backend with nothing to say to anyone,
+        // so it is swallowed rather than left unhandled.
+        if (!readOnly) void terminalResize(nodeId, term.rows, term.cols).catch(() => {});
       } catch {
         /* host detached mid-resize */
       }
