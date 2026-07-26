@@ -208,11 +208,26 @@ function AgentNodeImpl({ id, data }: NodeProps) {
           const agent = (await agentsByKind()).get(nodeData.kind);
           if (disposed) return;
           if (!agent || !agent.available) {
+            // Say what to do with what is actually on this machine.
+            //
+            // This used to tell people to run `just doctor`. That command lives in Identra's own
+            // repo, and someone who installed the app has no repo, no justfile, and most likely no
+            // `just` — so the first error the product ever shows them offered a fix they could not
+            // carry out. An error that names an impossible next step is worse than one that names
+            // none, because it costs a search before it comes to nothing.
+            //
+            // What is useful here is the machine's own answer: the other agents already installed
+            // are one click away, and switching to one of them beats installing anything.
+            const ready = [...(await agentsByKind()).values()]
+              .filter((a) => a.available)
+              .map((a) => a.name);
             term.write(
               `\r\n\x1b[31m${nodeData.kind} isn't installed\x1b[0m or not on your PATH.\r\n`,
             );
             term.write(
-              "Run `just doctor` to see what's missing, then reopen the node.\r\n",
+              ready.length > 0
+                ? `Already installed here: ${ready.join(", ")}. Delete this node and add one of those instead.\r\n`
+                : "Install a coding agent, then reopen this node. Identra runs the CLI on your machine; it does not ship one.\r\n",
             );
           } else {
             try {

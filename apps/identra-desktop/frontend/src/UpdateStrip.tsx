@@ -12,6 +12,14 @@ type State =
   | { at: "done" }
   | { at: "failed"; why: string };
 
+// The headline of a release note, for a strip one line tall. Release bodies are markdown with a
+// summary line and then bullets, so the first non-empty line is the sentence a person would have
+// written to answer "what is this one".
+function firstLine(body: string): string {
+  const line = body.split("\n").find((l) => l.trim() !== "")?.trim() ?? "";
+  return line.length > 90 ? `${line.slice(0, 89)}…` : line;
+}
+
 export default function UpdateStrip() {
   const [state, setState] = useState<State>({ at: "idle" });
 
@@ -52,6 +60,17 @@ export default function UpdateStrip() {
       {state.at === "offered" && (
         <>
           <span>Identra {state.update.version} is available.</span>
+          {/* What changed, when the release said. Asking someone to install an unnamed change to
+              the thing that runs agents against their code is asking for trust with nothing to
+              base it on, and the honest answer to "should I?" is the release notes. They ride
+              along on the update manifest already, so this costs no fetch: it was being thrown
+              away. Truncated because this is a strip, not a changelog, and the full text is on
+              the release page. */}
+          {state.update.body !== undefined && state.update.body !== "" && (
+            <span className="identra-update__notes" title={state.update.body}>
+              {firstLine(state.update.body)}
+            </span>
+          )}
           <button className="identra-update__go" onClick={() => void install()}>
             Install
           </button>

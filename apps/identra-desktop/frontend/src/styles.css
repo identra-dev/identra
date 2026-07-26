@@ -1770,6 +1770,16 @@ body {
   color: #f2e6f0;
   font-size: 12px;
 }
+/* What changed, next to the version. Dimmer than the version and capped in width: it is the
+   context for the decision, not the headline, and a long release note must not push the Install
+   button off a narrow window. */
+.identra-update__notes {
+  max-width: 46ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.72;
+}
 .identra-update__go {
   background: #fff;
   color: #77216f;

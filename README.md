@@ -71,14 +71,20 @@ Or right click the app and choose Open, which gives you the same dialog with an 
 it.
 
 **One thing to install first.** Identra runs coding agents, it does not include one. Put
-[codex](https://github.com/openai/codex) on your PATH and sign in:
+[Claude Code](https://claude.com/claude-code) on your PATH and sign in:
 
 ```bash
-codex --version   # if this works, Identra can run it
+claude --version   # if this works, Identra can run it
 ```
 
-Without it a node still opens. It tells you the binary is missing rather than pretending to
-work, but you will not see an agent run.
+Identra also runs [codex](https://github.com/openai/codex), gemini, and opencode, and you can
+mix them on one canvas. Claude Code is the one to start with: a project's memory reaches an
+agent over the MCP handshake, and it is the CLI that surfaces what arrives there, so it is the
+one where an agent opens already knowing what the project has learned. The others work, they
+just start that first session blank.
+
+Without any of them a node still opens. It names the agents you do have rather than pretending
+to work, but you will not see one run.
 
 ## Why i built this
 
@@ -94,8 +100,8 @@ agent so nobody starts from zero.
 
 ## What it does
 
-- Drop an agent node on an infinite canvas. It spawns a real `codex` process in a terminal
-  you can type into. No shell wrapper, no fake sandbox, the actual CLI on your machine.
+- Drop an agent node on an infinite canvas. It spawns a real `claude` or `codex` process in a
+  terminal you can type into. No shell wrapper, no fake sandbox, the actual CLI on your machine.
 - Type what you want done into the command bar (`⌘K` / `Ctrl+K` from anywhere, including from
   inside a node's terminal) and an orchestrator seat breaks the work up,
   spawns the helper nodes it needs, wires them, and puts the pieces on a shared task board you
@@ -139,7 +145,7 @@ switch that puts every prompt back, and then you answer them in the node like an
 
 ## Requirements
 
-**To run a release build:** `codex` on your PATH, and nothing else. Linux or macOS.
+**To run a release build:** one coding agent on your PATH, and nothing else. Linux or macOS.
 
 Windows is not supported yet. It is not a small port: interactive agent TUIs need ConPTY, the
 paths differ, and WebView2 wants its own testing. It is on the list, it is not this month.

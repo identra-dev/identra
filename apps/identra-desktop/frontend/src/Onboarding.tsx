@@ -6,10 +6,23 @@ import type { AgentInfo } from "./api";
 // and the empty-canvas hint tells you to "pick an agent" you have no way to pick. This says what to
 // install and then gets out of the way the moment one is found.
 
-// The agents Identra fronts. Codex leads because it is the one with an exact install page to point
-// at; the others are named so you know what else runs, without a shell command that would drift by
-// OS and version and be wrong more often than not.
-const FRONTED = ["codex", "claude", "gemini", "opencode"];
+// The agents Identra fronts, and which one this screen names first.
+//
+// It led with codex, on the reasoning that codex had the tidiest install page to point at. That is
+// a real consideration and it is the wrong one, because the agent someone installs here is the
+// agent they judge Identra by. Identra's whole pitch is that a project's memory is waiting for an
+// agent the moment it connects, and that arrives over the MCP handshake's instructions field —
+// which claude surfaces and codex does not. Someone who takes this screen's advice therefore
+// installs the one agent that quietly turns the headline feature off, then forms their opinion of
+// the product without ever seeing it work.
+//
+// So: lead with the one that shows what this is for. The rest are named because they do run here
+// and someone who already has one should not be told to install anything.
+//
+// A page rather than a shell command, deliberately: an install line drifts by OS, by version and
+// by package manager, and a wrong one on the first screen is worse than no line at all.
+const LEAD = { id: "claude", name: "Claude Code", where: "claude.com/claude-code" };
+const FRONTED = ["claude", "codex", "gemini", "opencode"];
 
 type Props = {
   agents: AgentInfo[];
@@ -25,7 +38,7 @@ function joinNames(names: string[]): string {
 
 export default function Onboarding({ agents, onRecheck }: Props) {
   const others = agents
-    .filter((a) => FRONTED.includes(a.id) && a.id !== "codex")
+    .filter((a) => FRONTED.includes(a.id) && a.id !== LEAD.id)
     .map((a) => a.name);
   // The probe is fast, but a button that changes nothing on screen reads as broken, and a
   // tester read it exactly that way. So the click shows its work: a checking state while the
@@ -57,8 +70,8 @@ export default function Onboarding({ agents, onRecheck }: Props) {
         Install one and it shows up in the dock below.
       </p>
       <div className="identra-onboard__agent">
-        <span className="identra-onboard__name">Codex</span>
-        <span className="identra-onboard__where">github.com/openai/codex</span>
+        <span className="identra-onboard__name">{LEAD.name}</span>
+        <span className="identra-onboard__where">{LEAD.where}</span>
       </div>
       {others.length > 0 && (
         <p className="identra-onboard__more">
