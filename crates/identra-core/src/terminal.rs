@@ -172,9 +172,15 @@ type Sink = Arc<dyn Fn(String, Event) + Send + Sync>;
 /// content. There is nothing to synchronise against here: the CLI never says "I have your text",
 /// so the gap is what does the disambiguating.
 ///
-// ponytail: a fixed delay, because no agent CLI offers a signal to wait on. 150ms is well past any
-// paste window and under what a person notices. If some agent ever proves slower, the upgrade is to
-// wait for its output to go quiet rather than to make this number bigger.
+/// Measured rather than assumed. Driving a real agent CLI on a pty with the same prompt both ways,
+/// asking it something whose answer is not in the prompt so the composer's own echo cannot be
+/// mistaken for a reply: written as one chunk it never answered, and the prompt was left empty.
+/// Written as body, pause, return, it answered every time. That is the entire bug and the entire
+/// fix, and it is why this cannot be simplified back into a single write.
+///
+// ponytail: a fixed delay, because no agent CLI offers a signal to wait on. 150ms cleared the paste
+// window on the CLI I measured, and is under what a person notices. If some agent ever proves
+// slower, the upgrade is to wait for its output to go quiet rather than to make this number bigger.
 const SUBMIT_DELAY: Duration = Duration::from_millis(150);
 
 pub struct TerminalManager {
