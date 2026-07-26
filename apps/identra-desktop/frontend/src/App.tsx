@@ -988,11 +988,25 @@ export default function App() {
     [addNode, wire],
   );
 
+  // One subscription for the life of the window, reading the current handler through a ref.
+  //
+  // Subscribing on `applyCanvasCommand` looked right and is a trap. Its identity changes whenever
+  // anything it closes over does, and the unlisten is a promise, so a re-subscribe is: register the
+  // new listener, then await the old one's teardown. A command arriving inside that window is
+  // delivered to both, and both act on it — an agent's `add_terminal` becomes two nodes on the
+  // canvas and its `connect_nodes` wires twice, with no error anywhere to explain it.
+  //
+  // It has not happened yet only because the dependency chain happens to bottom out somewhere
+  // stable today. That is not a property anyone can see from here, and the first innocuous change
+  // that makes `addNode` re-created per render turns it into a duplicating canvas. A ref costs one
+  // line and takes the whole class off the table.
+  const applyRef = useRef(applyCanvasCommand);
+  applyRef.current = applyCanvasCommand;
   useEffect(() => {
     const un = onCanvasCommand((cmd) => {
       let result: CanvasResult;
       try {
-        result = applyCanvasCommand(cmd);
+        result = applyRef.current(cmd);
       } catch (e) {
         // Never leave the agent hanging on our bug: it waits on this reply.
         result = { ok: false, error: String(e) };
@@ -1002,7 +1016,7 @@ export default function App() {
     return () => {
       void un.then((f) => f());
     };
-  }, [applyCanvasCommand]);
+  }, []);
 
   // The seat is canvas state, not node state, so it is stamped onto the nodes at render rather than
   // stored in them. That keeps one seat id as the only truth, and it keeps `seat` out of what gets
@@ -1297,7 +1311,24 @@ export default function App() {
           plan={plan}
           seatId={seat}
           awaitingAnswer={seatAsking}
-          onSubmit={(instruction) => void sendToSeat(instruction)}
+          // The last word on a dispatch, wherever it went wrong.
+          //
+          // `sending` disables the input, which is right while an instruction is genuinely on its
+          // way and a disaster if it latches: the bar is the only way to talk to the orchestrator,
+          // so a stuck `sending` is an app that has to be restarted to accept another word.
+          // Every failure `sendToSeat` knows about already reports itself, but it also awaits
+          // several calls that can reject on their own — an IPC that goes away mid-dispatch is
+          // enough — and an unhandled rejection there leaves the bar disabled with nothing said.
+          // Catching at the one place every path returns through is what makes that impossible,
+          // rather than guarding each await and hoping the next one added gets the same treatment.
+          onSubmit={(instruction) =>
+            void sendToSeat(instruction).catch((e: unknown) =>
+              setDispatch({
+                kind: "failed",
+                error: `The instruction did not go anywhere: ${String(e)}`,
+              }),
+            )
+          }
         />
       )}
 

@@ -6,7 +6,15 @@ default:
     @just --list
 
 # run the app with hot reload
+#
+# Clears its own port first. Vite is pinned to 1420 with strictPort, because the Tauri window loads
+# that exact address and a dev server that quietly moves to 1421 gives you a blank window instead of
+# an app. The cost of pinning is that anything still holding 1420 makes every later run fail the
+# same way, and a `just dev` that dies partway leaves cargo-tauri, vite and the built app behind — so
+# one interrupted run poisons every run after it, with an error that names a port and not a cause.
+# That is a genuinely confusing half hour the first time, and it is nobody's fault twice.
 dev:
+    @lsof -ti tcp:1420 2>/dev/null | xargs -r kill 2>/dev/null || true
     cd apps/identra-desktop && cargo tauri dev
 
 # fetch the embedding model into the bundle's resources (once; a release build ships it)

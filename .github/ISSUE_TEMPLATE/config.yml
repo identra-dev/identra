@@ -3,3 +3,6 @@ contact_links:
   - name: Security issue
     url: https://github.com/identra-dev/identra/security/advisories/new
     about: Report privately rather than in a public issue. Identra runs agents against your code, so anything touching the context bus, the workspace boundary, or what an agent is allowed to reach belongs here.
+  - name: Question, or something that felt wrong
+    url: https://github.com/identra-dev/identra/discussions
+    about: Not sure it is a bug, got stuck somewhere, or something read as broken when it was working. Worth saying — where people get stuck is the thing this cannot see from the outside.
