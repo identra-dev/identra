@@ -558,6 +558,29 @@ fn shingles(text: &str) -> std::collections::HashSet<String> {
     words.windows(3).map(|w| w.join(" ")).collect()
 }
 
+/// Every run of digits in a fact, each as its own token. `us-east-1` gives `1`, `block13` gives
+/// `13`, and `v0.1.2` gives `0`, `1` and `2`.
+///
+/// Runs of digits rather than parsed numbers on purpose. The question this answers is only "do these
+/// two sentences disagree about a figure", and treating `08` and `8` as a disagreement is the safe
+/// direction to be wrong in: it keeps a fact that might be a restatement, instead of dropping one
+/// that is not.
+fn digits(text: &str) -> std::collections::HashSet<String> {
+    let mut found = std::collections::HashSet::new();
+    let mut run = String::new();
+    for c in text.chars() {
+        if c.is_ascii_digit() {
+            run.push(c);
+        } else if !run.is_empty() {
+            found.insert(std::mem::take(&mut run));
+        }
+    }
+    if !run.is_empty() {
+        found.insert(run);
+    }
+    found
+}
+
 /// Drop facts that restate one already kept, preserving order.
 ///
 /// A memory store accumulates the same decision in several wordings: three agents each record that
@@ -573,23 +596,42 @@ fn shingles(text: &str) -> std::collections::HashSet<String> {
 ///
 /// The first wording of a thing wins, and the caller hands these in newest first, so what survives
 /// is the most recent way the project put it.
+///
+/// Figures are checked before phrasing, and a disagreement about one settles it. "deploy the worker
+/// to region us-east-1" and "...us-east-2" share every trigram but the last, which is a Jaccard of
+/// exactly 0.6 and therefore a collapse under the threshold above — two real, different decisions,
+/// and the second silently gone from every agent's connect payload with nothing to show it happened.
+/// A sentence whose whole content is a number cannot be deduped on the words around the number.
+///
+/// So: if two facts name different figures, they are different facts whatever their wording. If they
+/// name the same figures, or neither names any, phrasing decides as before. One naming a figure and
+/// the other not counts as a disagreement, which errs toward keeping a fact, the direction this
+/// whole function is tuned to err in.
 pub fn drop_near_duplicates(facts: Vec<String>) -> Vec<String> {
-    let mut kept: Vec<(String, std::collections::HashSet<String>)> = Vec::new();
+    let mut kept: Vec<(
+        String,
+        std::collections::HashSet<String>,
+        std::collections::HashSet<String>,
+    )> = Vec::new();
     for fact in facts {
         let shape = shingles(&fact);
         if shape.is_empty() {
             continue;
         }
-        let redundant = kept.iter().any(|(_, seen)| {
+        let figures = digits(&fact);
+        let redundant = kept.iter().any(|(_, seen, seen_figures)| {
+            if *seen_figures != figures {
+                return false;
+            }
             let overlap = shape.intersection(seen).count() as f32;
             let union = shape.union(seen).count() as f32;
             union > 0.0 && overlap / union >= NEAR_DUPLICATE
         });
         if !redundant {
-            kept.push((fact, shape));
+            kept.push((fact, shape, figures));
         }
     }
-    kept.into_iter().map(|(fact, _)| fact).collect()
+    kept.into_iter().map(|(fact, _, _)| fact).collect()
 }
 
 fn unix_now() -> i64 {
@@ -626,6 +668,50 @@ mod dedup_tests {
                 "The API issues JWT bearer tokens rather than server side sessions".to_string(),
             ],
             "the restatement goes, everything that says something new stays"
+        );
+    }
+
+    /// Two facts that differ only in a number are two facts, and the number is the whole content.
+    ///
+    /// This is the failure mode the threshold comment warns about from the other side: erring high
+    /// loses a fact. Trigram Jaccard cannot see that `us-east-1` and `us-east-2` are the point of
+    /// the sentence rather than a detail of it, so a pair of real, different decisions scores as
+    /// restatement and the second one is dropped out of every agent's connect payload — silently,
+    /// and with no way for anyone to notice it happened.
+    #[test]
+    fn facts_differing_only_by_a_number_both_survive() {
+        let kept = drop_near_duplicates(vec![
+            "deploy the worker to region us-east-1".to_string(),
+            "deploy the worker to region us-east-2".to_string(),
+        ]);
+        assert_eq!(
+            kept,
+            vec![
+                "deploy the worker to region us-east-1".to_string(),
+                "deploy the worker to region us-east-2".to_string(),
+            ],
+            "a differing number is a differing fact, not a restatement"
+        );
+
+        // The same shape without the numbers still has to collapse, or the guard has simply turned
+        // near-duplicate detection off for anything with a digit in it.
+        let kept = drop_near_duplicates(vec![
+            "the job queue moved off redis to postgres listen/notify".to_string(),
+            "the job queue moved off redis to postgres listen notify.".to_string(),
+        ]);
+        assert_eq!(kept.len(), 1, "restatement without numbers still collapses");
+
+        // A figure both facts agree on is not a reason to keep a restatement. The guard only ever
+        // blocks on disagreement, so a fact carrying a number still collapses against its own
+        // rewording, and the number riding along changes nothing.
+        let kept = drop_near_duplicates(vec![
+            "the api listens on port 8080 in development".to_string(),
+            "The API listens on port 8080 in development.".to_string(),
+        ]);
+        assert_eq!(
+            kept.len(),
+            1,
+            "an agreed figure leaves restatement collapsing as before"
         );
     }
 
