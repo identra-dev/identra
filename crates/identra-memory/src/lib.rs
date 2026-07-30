@@ -608,18 +608,43 @@ fn digits(text: &str) -> std::collections::HashSet<String> {
 /// the other not counts as a disagreement, which errs toward keeping a fact, the direction this
 /// whole function is tuned to err in.
 pub fn drop_near_duplicates(facts: Vec<String>) -> Vec<String> {
+    let survives = near_duplicate_mask(&facts);
+    facts
+        .into_iter()
+        .zip(survives)
+        .filter(|(_, keep)| *keep)
+        .map(|(fact, _)| fact)
+        .collect()
+}
+
+/// Which of these facts survive the collapse, position by position. `true` is kept, `false` is
+/// already said by an earlier one.
+///
+/// The decision lives here and [`drop_near_duplicates`] is a filter over it, so there is one
+/// implementation rather than two that agree until someone edits one of them.
+///
+/// This exists because the collapse runs on the connect payload and nowhere else, so the work panel
+/// was listing every restatement while the agents received one. That reads as memory repeating
+/// itself, and worse, it means the panel could not say which facts an agent will actually be told.
+/// Filtering the panel to match would have been the smaller change and the wrong one: a hidden fact
+/// is a fact nobody can delete, and a store the user cannot correct is the thing the panel exists to
+/// prevent. So the panel keeps every row and marks the ones that do not travel.
+pub fn near_duplicate_mask(facts: &[String]) -> Vec<bool> {
     let mut kept: Vec<(
-        String,
         std::collections::HashSet<String>,
         std::collections::HashSet<String>,
     )> = Vec::new();
+    let mut survives = Vec::with_capacity(facts.len());
     for fact in facts {
-        let shape = shingles(&fact);
+        let shape = shingles(fact);
+        // Nothing to compare and nothing to say. Treated as not surviving, which is what
+        // `drop_near_duplicates` has always done with it.
         if shape.is_empty() {
+            survives.push(false);
             continue;
         }
-        let figures = digits(&fact);
-        let redundant = kept.iter().any(|(_, seen, seen_figures)| {
+        let figures = digits(fact);
+        let redundant = kept.iter().any(|(seen, seen_figures)| {
             if *seen_figures != figures {
                 return false;
             }
@@ -627,11 +652,12 @@ pub fn drop_near_duplicates(facts: Vec<String>) -> Vec<String> {
             let union = shape.union(seen).count() as f32;
             union > 0.0 && overlap / union >= NEAR_DUPLICATE
         });
+        survives.push(!redundant);
         if !redundant {
-            kept.push((fact, shape, figures));
+            kept.push((shape, figures));
         }
     }
-    kept.into_iter().map(|(fact, _, _)| fact).collect()
+    survives
 }
 
 fn unix_now() -> i64 {

@@ -3,6 +3,7 @@ import {
   boardList,
   memoryForget,
   memoryList,
+  memoryRestated,
   memoryModelRetry,
   memorySearch,
   memoryStatus,
@@ -36,6 +37,10 @@ export default function WorkPanel({
   const [tab, setTab] = useState<Tab>(initialTab);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [memories, setMemories] = useState<Memory[]>([]);
+  // Ids in `memories` that a newer fact already restates. A set rather than a field on the row,
+  // because it is a fact about the list and not about the memory: the same row is a restatement or
+  // not depending on what else is in view, and the store has no business carrying that.
+  const [restated, setRestated] = useState<Set<number>>(new Set());
   const [error, setError] = useState<string | null>(null);
   // Empty means "show everything, newest first" (the polled list). A query switches the memory tab
   // over to ranked search results, so the human can ask the same question an agent would.
@@ -65,17 +70,22 @@ export default function WorkPanel({
 
   const refresh = useCallback(async () => {
     try {
-      const [t, m, s] = await Promise.all([
+      const [t, m, s, restated] = await Promise.all([
         boardList(),
         memoryList(50),
         // Its own catch, and deliberately not part of the failure above: not knowing what the
         // model is doing is not a reason to stop showing the board and the facts, which is what
         // people have the panel open for.
         memoryStatus().catch(() => null),
+        // Same limit as the list, and its own catch for the same reason as the model status: a
+        // missing badge is a smaller loss than a panel that will not draw. Failing to an empty set
+        // means every row simply renders unmarked, which is what the panel did before.
+        memoryRestated(50).catch(() => [] as number[]),
       ]);
       setTasks(t);
       setMemories(m);
       setModel(s);
+      setRestated(new Set(restated));
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -300,6 +310,24 @@ export default function WorkPanel({
                       Who and when are the two axes anyone scans a memory list on. */}
                   <span className="identra-memory__meta">
                     <span>{ago(m.created_at, nowSeconds)}</span>
+                    {/* Why the same decision appears more than once. Three agents write down that
+                        the queue moved to postgres in three wordings, every one a real row, and the
+                        panel showed all three with nothing to say they were one thing. Marking the
+                        older wordings is what turns a list that looks like it is losing track of
+                        itself into a list that is visibly keeping the newest version of each thing.
+                        Only in the browse list: search ranks by relevance, so "newer" has no
+                        meaning there and the mark would be pointing at nothing. */}
+                    {query.trim() === "" && restated.has(m.id) && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span
+                          className="identra-memory__restated"
+                          title="A newer fact above says this too. Agents are told the newest wording, so this one is not sent again."
+                        >
+                          restated more recently
+                        </span>
+                      </>
+                    )}
                     {m.run_id !== "" && (
                       <>
                         <span aria-hidden="true">·</span>
