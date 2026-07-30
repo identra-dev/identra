@@ -8,6 +8,7 @@
 // Asked at the moment of making it, because that is when someone knows what it is for. Renaming
 // later exists and nobody does it.
 import { useState } from "react";
+import { useEscape } from "./useEscape";
 
 // What goes in the box before anyone types. Real-looking rather than clever: this one is a folder
 // name, so the suggestion should read like something you would actually call a project.
@@ -23,6 +24,14 @@ type Props = {
 
 export default function NameWorkspace({ onCancel, onName }: Props) {
   const [typed, setTyped] = useState("");
+
+  // Escape cancels, from anywhere in the dialog. This used to hang off the input's own `onKeyDown`,
+  // which works right up until focus is not in the input — tab once to Create, or click anywhere in
+  // the card, and the key that closes every other overlay in the app did nothing here. That is the
+  // exact failure `useEscape` was extracted to prevent, and its own comment says why: a key that
+  // closes one overlay but not the next one is worse than a key that closes nothing, because the
+  // user learns it works and then it silently does not.
+  useEscape(onCancel);
 
   return (
     <div
@@ -53,9 +62,6 @@ export default function NameWorkspace({ onCancel, onName }: Props) {
             className="identra-ask__input"
             value={typed}
             onChange={(e) => setTyped(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Escape") onCancel();
-            }}
             placeholder={PLACEHOLDER}
             aria-label="Workspace name"
             maxLength={60}
