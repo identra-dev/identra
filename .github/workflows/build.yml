@@ -34,6 +34,20 @@ jobs:
             libayatana-appindicator3-dev librsvg2-dev
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      # install.sh is the one file here that strangers pipe straight into a shell, which makes it the
+      # highest blast radius thing this repo ships and the only one with no gate on it until now. It
+      # is POSIX sh on purpose, because `curl | sh` runs under dash on Debian and Ubuntu, and a
+      # bashism is the exact bug that class of file has: it passes every test the author runs on
+      # their own machine and fails on most of the machines it is aimed at. shellcheck -s sh is what
+      # notices. `sh -n` is belt and braces: a parse check that still fails the build if shellcheck
+      # is ever missing from the runner image rather than passing silently.
+      #
+      # ubuntu-latest ships shellcheck, so this adds no install step and about a second. It passes
+      # clean as of the commit that added it, so the gate cannot be the thing that turns CI red first.
+      - name: Install script
+        run: |
+          shellcheck -s sh install.sh
+          sh -n install.sh
       # No model in CI. A workspace build enables the embedding feature because the app asks for
       # it, and downloading 130MB from a model host on every push is a flake waiting to happen.
       - run: IDENTRA_EMBEDDINGS=off cargo test --workspace
