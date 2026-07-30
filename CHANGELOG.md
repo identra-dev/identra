@@ -31,6 +31,24 @@ guide and three diagrams, and contained none of them. It now holds what it says 
   dmg, an agent that is installed but invisible to a GUI launch, a wire drawn after launch, and port
   1420.
 
+**The canvas and the memory panel say what they are actually doing.** Three things the app knew and
+did not tell you, each of which read as the product being broken while it worked as designed.
+
+- **A wire drawn onto an agent that is already running now says it is waiting.** An edge is the
+  permission to share context and a CLI reads its MCP servers once at startup, so a wire drawn after
+  launch was real, saved, and carried nothing until that node next started. It did that silently, so
+  wiring two agents and watching nothing happen looked like a broken bus. The wire is now dashed and
+  reads "connects at next launch", which is the truth for exactly as long as it holds.
+- **The memory panel says which wording of a fact the agents are handed.** Three agents recording one
+  decision in three sentences gave the agents one fact and the panel three rows, with nothing to say
+  they were the same thing, so memory looked like it was losing track of itself. Older wordings are
+  marked "restated more recently". Nothing is hidden and every row is still deletable, because a fact
+  you cannot see is a fact you cannot correct.
+- **A memory fact that differs only by a number is no longer thrown away.** "deploy the worker to
+  region us-east-1" and the same line ending "us-east-2" scored as restatement and the second was
+  dropped out of every agent's briefing, silently. Two deploy regions, two ports, two retry counts:
+  figures are now compared before phrasing, and a disagreement about one settles it.
+
 ## v0.1.1
 
 **Install with one command, and nothing downloads after it.**
