@@ -337,6 +337,40 @@ fn memory_list(state: State<AppState>, limit: Option<usize>) -> Result<Vec<Memor
         .map_err(|e| e.to_string())
 }
 
+/// Which of the listed facts are restatements of a newer one, by id.
+///
+/// The panel was listing every wording of a decision while agents were handed one, because the
+/// collapse runs on the connect payload and nowhere else. Three agents record that the queue moved
+/// to postgres, in three sentences, and all three are real distinct rows the panel dutifully showed.
+/// To the person reading it, memory looked like it was repeating itself, and there was no way to tell
+/// which row was the one that travels.
+///
+/// The rows are all still returned by `memory_list` and every one stays deletable. Filtering them out
+/// here would have been fewer lines and the wrong shape: a row nobody can see is a row nobody can
+/// correct, and a store the user cannot correct is the thing the panel exists to prevent.
+///
+/// Scoped deliberately to the rows in this list rather than to what connect will send. Whether a
+/// fact reaches an agent also depends on the connect window and the byte cap, so a claim like "not
+/// sent to agents" would be saying more than this knows. What it does know exactly is that a newer
+/// row already says this, and that is what the badge says.
+#[tauri::command]
+fn memory_restated(state: State<AppState>, limit: Option<usize>) -> Result<Vec<i64>, String> {
+    let dir = state.dir();
+    // The same store, filter and limit as `memory_list`, in the same newest-first order, so the two
+    // answers describe the same list. Any drift between them would put the badge on the wrong row.
+    let store = identra_mcp::server::open_memory(&dir)?;
+    let facts = store
+        .recent(&memory_filter(&dir), limit.unwrap_or(50))
+        .map_err(|e| e.to_string())?;
+    let contents: Vec<String> = facts.iter().map(|m| m.content.clone()).collect();
+    Ok(identra_memory::near_duplicate_mask(&contents)
+        .into_iter()
+        .zip(facts)
+        .filter(|(survives, _)| !*survives)
+        .map(|(_, m)| m.id)
+        .collect())
+}
+
 /// Search what the project has learned. Same ranking the agents get: with a model, by meaning;
 /// without one, by words. This is why it goes through the bus opener rather than a bare store.
 #[tauri::command]
@@ -833,6 +867,7 @@ pub fn run() {
             canvas_command_result,
             board_list,
             memory_list,
+            memory_restated,
             memory_search,
             memory_status,
             memory_forget,

@@ -608,14 +608,61 @@ export default function App() {
     [scheduleSave],
   );
 
+  // Drawing a wire onto an agent that is already running does nothing, and used to do nothing
+  // silently.
+  //
+  // An edge is the permission to share context, and it is read once: a CLI loads its MCP servers at
+  // startup, so a wire drawn afterwards is real on the canvas, saved to the canvas, and completely
+  // inert until that node next starts. The README has said "draw the wire, then launch" since the
+  // feature shipped. The app never said it, so the honest reading of the user's experience is that
+  // they wired two agents, watched nothing happen, and concluded the bus was broken.
+  //
+  // The wire says it itself rather than a message saying it. This codebase has no toast surface and
+  // says so twice in its own stylesheet, and it is right: a line that appears and goes is the wrong
+  // shape for a fact that stays true until you relaunch. A dashed edge that reads "connects at next
+  // launch" is the state, drawn where the user is already looking, for exactly as long as it holds.
+  //
+  // The mark is deliberately not persisted. `snapshot` writes edges as id, source and target only,
+  // so reopening the workspace drops it — which is correct, because reopening relaunches the agents
+  // and the wire genuinely does take effect. The one gap is relaunching a single node mid-session:
+  // the mark goes stale until the next reload. Closing that would mean this component tracking every
+  // node's launches, and a slightly stale hint is a far smaller cost than no hint at all, which is
+  // what shipped.
   const onConnect = useCallback(
     (c: Connection) => {
-      setEdges((cur) => {
-        const next = addEdge(c, cur);
-        edgesRef.current = next;
-        scheduleSave();
-        return next;
-      });
+      // The status probe first, so the edge is drawn already marked rather than flickering from
+      // plain to dashed. It is one local IPC call, and a null status means a node that has never
+      // started, which is the case where the wire works normally.
+      void (async () => {
+        let inert = false;
+        try {
+          const ends = [c.source, c.target].filter((id): id is string => id !== null);
+          const statuses = await Promise.all(
+            ends.map((id) => terminalStatus(id).catch(() => null)),
+          );
+          inert = statuses.some((s) => s !== null);
+        } catch {
+          // A probe that will not answer must not cost the user their wire. Draw it plain: the
+          // worst case is the old behaviour, and the wire itself is still saved either way.
+          inert = false;
+        }
+        setEdges((cur) => {
+          const next = addEdge(
+            inert
+              ? {
+                  ...c,
+                  label: "connects at next launch",
+                  style: { strokeDasharray: "6 4" },
+                  className: "identra-edge--inert",
+                }
+              : c,
+            cur,
+          );
+          edgesRef.current = next;
+          scheduleSave();
+          return next;
+        });
+      })();
     },
     [scheduleSave],
   );

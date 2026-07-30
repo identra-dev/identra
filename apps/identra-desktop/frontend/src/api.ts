@@ -201,6 +201,14 @@ export const boardList = () => invoke<Task[]>("board_list");
 export const memoryList = (limit?: number) =>
   invoke<Memory[]>("memory_list", { limit: limit ?? null });
 
+// The ids, within the same list `memoryList` returns, that a newer fact already restates. The panel
+// still shows and can still delete every row; these are the ones it marks, so "the same decision
+// three times" reads as three wordings of one thing rather than as memory losing track of itself.
+//
+// Same limit as the list it describes, or the mask lands on the wrong rows.
+export const memoryRestated = (limit?: number) =>
+  invoke<number[]>("memory_restated", { limit: limit ?? null });
+
 export const memorySearch = (query: string, limit?: number) =>
   invoke<Memory[]>("memory_search", { query, limit: limit ?? null });
 
