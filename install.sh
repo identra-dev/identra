@@ -88,9 +88,18 @@ fi
 #
 # The pattern is anchored to the end of the URL. Every bundle has a `.sig` sibling next to it for
 # the updater, and an unanchored match picks whichever of the pair the API happened to list first.
-url=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/tags/$VERSION" 2>/dev/null \
+# Fetched once and held, so the two ways this can fail can be told apart. Asking the API and
+# grepping in one pipeline collapsed them: a tag that does not exist and a release with no asset for
+# this platform both ended at "no build for $os $arch", which names the wrong cause. Someone who sets
+# IDENTRA_VERSION=0.1.1 and forgets the v is then told their operating system is unsupported, and
+# goes looking for a platform problem that is not there. `curl -f` fails on the 404, so an empty
+# body here means the tag, and a non-empty one with no match means the asset.
+release=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/tags/$VERSION" 2>/dev/null) || release=""
+[ -n "$release" ] || die "no release tagged $VERSION — tags start with a v, as in v0.1.2. The list is at https://github.com/$REPO/releases"
+
+url=$(printf '%s' "$release" \
   | sed -n 's/.*"browser_download_url": *"\([^"]*\)".*/\1/p' | grep "$asset" | head -n 1)
-[ -n "$url" ] || die "release $VERSION has no build for $os $arch"
+[ -n "$url" ] || die "release $VERSION has no $kind build for $os $arch — see https://github.com/$REPO/releases"
 
 say "Identra $VERSION"
 
