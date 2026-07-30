@@ -13,6 +13,12 @@ default:
 # same way, and a `just dev` that dies partway leaves cargo-tauri, vite and the built app behind — so
 # one interrupted run poisons every run after it, with an error that names a port and not a cause.
 # That is a genuinely confusing half hour the first time, and it is nobody's fault twice.
+#
+# `[doc]` rather than relying on the comment above: just takes only the LAST comment line as a
+# recipe's description, so a long explanation like this one turned `just --list` into a dangling
+# fragment ("That is a genuinely confusing half hour...") next to the most important recipe here.
+# The attribute keeps the explanation for whoever opens this file and gives the list a real summary.
+[doc("build and run with hot reload")]
 dev:
     @lsof -ti tcp:1420 2>/dev/null | xargs -r kill 2>/dev/null || true
     cd apps/identra-desktop && cargo tauri dev
@@ -44,6 +50,9 @@ recall-check:
 # case that shipped broken once: CLIs that resolve in a terminal were invisible to a bundled build.
 # The binary is built first and then run under the bare env, because cargo itself needs the PATH
 # this is taking away. Every installed agent should still print an absolute cmd.
+#
+# Same reason as `dev` above: without this the list showed the tail of that sentence.
+[doc("check agent discovery under the stripped PATH a GUI launch gives the app")]
 detect-check:
     cargo build -p identra-core --example detect_probe
     env -i HOME="$HOME" PATH=/usr/bin:/bin ./target/debug/examples/detect_probe
