@@ -5,6 +5,32 @@ What changed in each release, in the terms a person using Identra would notice.
 Identra updates itself from Releases, and the update strip asks before it installs anything. This
 file is the answer to "what am I saying yes to".
 
+## v0.1.2
+
+**Every dialog closes the way you expect.** Escape closed the settings panel, the wallpaper picker,
+the files panel and the work panel, and then did nothing in the two newest dialogs. Now it closes
+all of them, from anywhere inside them.
+
+- **Escape cancels the name-a-workspace dialog** even when focus has left the text field. It was
+  bound to the input itself, so tabbing once to Create was enough to make the key stop working.
+- **Escape and clicking away both dismiss the "what should I call you?" question.** It was the only
+  overlay in the app with no way out but its own two buttons, on the first screen a new install
+  shows. Dismissing means "not now" and asks again next launch; it deliberately does not save an
+  answer, because "do not greet me" is a permanent choice and deserves the button rather than a
+  keystroke someone pressed to make a box go away.
+
+**Documentation you can read without cloning the repo.** `docs/` promised a UI spec, a contributing
+guide and three diagrams, and contained none of them. It now holds what it says it does:
+
+- **[Agents](docs/agents.md)** — the four CLIs Identra runs, the exact flag each one is passed in
+  bypass mode, why Claude Code is the one that shows you project memory on connect, and why
+  `--strict-mcp-config` is deliberately not passed.
+- **[Memory](docs/memory.md)** — what a session leaves behind, why recall matches meaning rather
+  than words, why there is no confidence threshold, and how to turn it off.
+- **[Troubleshooting](docs/troubleshooting.md)** — the AppImage that needs libfuse2, the unnotarized
+  dmg, an agent that is installed but invisible to a GUI launch, a wire drawn after launch, and port
+  1420.
+
 ## v0.1.1
 
 **Install with one command, and nothing downloads after it.**

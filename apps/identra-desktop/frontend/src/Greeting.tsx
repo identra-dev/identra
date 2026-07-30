@@ -8,8 +8,9 @@
 // The greeting shows itself and then gets out of the way. A permanent name badge is decoration you
 // stop seeing by the third launch; a line that appears when you open the app and fades is the part
 // that actually lands, because it only happens at the moment you arrive.
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { settingsGet, settingsSet, type Settings } from "./api";
+import { useEscape } from "./useEscape";
 
 // How long the hello stays before it fades. Long enough to read at a glance and be sure it was
 // meant for you, short enough that it is gone before you have finished deciding what to type.
@@ -95,6 +96,27 @@ export default function Greeting() {
     return () => window.clearTimeout(timer);
   }, [phase.at]);
 
+  // "Not now", as opposed to "no". Escape and a click outside both land here.
+  //
+  // This dialog was the one overlay in the app with no way out but its own two buttons: no Escape,
+  // no click-away, on the very first screen a new install shows. Every other overlay closes on
+  // Escape, so the key someone reflexively presses to dismiss a box did nothing exactly once, on
+  // first run, which is the worst possible place to teach someone the app ignores them.
+  //
+  // Deliberately does NOT write settings. An empty name is a real, remembered answer meaning "do
+  // not greet me", and that is what "Rather not" is for — a permanent choice deserves a deliberate
+  // click, never a keystroke someone pressed to make a box go away. So dismissing leaves `name` as
+  // `None` and the ask comes back next launch. Being asked again is the honest cost of not
+  // answering; silently deciding on their behalf is not.
+  //
+  // The functional update is what keeps this correct without a dependency on `phase`: it only acts
+  // while the question is actually on screen, so the window-level Escape listener cannot turn a
+  // fading hello, or a quiet canvas, into a state change.
+  const dismiss = useCallback(() => {
+    setPhase((cur) => (cur.at === "asking" ? { at: "quiet" } : cur));
+  }, []);
+  useEscape(dismiss);
+
   if (phase.at === "loading" || phase.at === "quiet") return null;
 
   if (phase.at === "greeting") {
@@ -126,8 +148,21 @@ export default function Greeting() {
   };
 
   return (
-    <div className="identra-ask__scrim">
-      <div className="identra-ask" role="dialog" aria-label="What to call you">
+    <div
+      className="identra-ask__scrim"
+      // Same as the name-workspace dialog, and for the same reason: a one-field question with a way
+      // out does not need to trap anybody. Clicking away is "not now", never "no".
+      onMouseDown={dismiss}
+    >
+      <div
+        className="identra-ask"
+        role="dialog"
+        aria-label="What to call you"
+        // Without this, every click that lands on the card bubbles to the scrim and dismisses the
+        // question the user was in the middle of answering — including the click that put the
+        // cursor in the text field.
+        onMouseDown={(e) => e.stopPropagation()}
+      >
         <p className="identra-ask__lead">What should I call you?</p>
         <p className="identra-ask__sub">
           Identra says hello with it when it opens. It stays on this machine.

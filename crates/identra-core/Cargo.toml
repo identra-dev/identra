@@ -1,6 +1,6 @@
 [package]
 name = "identra-core"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 license = "Apache-2.0"
 description = "Identra's runtime-agnostic engine: PTY/terminal manager, canvas store, agent detection."
