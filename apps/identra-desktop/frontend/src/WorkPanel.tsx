@@ -4,6 +4,7 @@ import {
   memoryForget,
   memoryList,
   memoryRestated,
+  memorySuperseded,
   memoryModelRetry,
   memorySearch,
   memoryStatus,
@@ -41,6 +42,10 @@ export default function WorkPanel({
   // because it is a fact about the list and not about the memory: the same row is a restatement or
   // not depending on what else is in view, and the store has no business carrying that.
   const [restated, setRestated] = useState<Set<number>>(new Set());
+  // Stale fact id to the id of the fact that revised it. A map rather than a set, because this mark
+  // has to name what replaced it: "out of date" on its own leaves the reader looking for a fact
+  // they cannot identify in a list of fifty.
+  const [revised, setRevised] = useState<Map<number, number>>(new Map());
   const [error, setError] = useState<string | null>(null);
   // Empty means "show everything, newest first" (the polled list). A query switches the memory tab
   // over to ranked search results, so the human can ask the same question an agent would.
@@ -70,7 +75,7 @@ export default function WorkPanel({
 
   const refresh = useCallback(async () => {
     try {
-      const [t, m, s, restated] = await Promise.all([
+      const [t, m, s, restated, superseded] = await Promise.all([
         boardList(),
         memoryList(50),
         // Its own catch, and deliberately not part of the failure above: not knowing what the
@@ -81,11 +86,15 @@ export default function WorkPanel({
         // missing badge is a smaller loss than a panel that will not draw. Failing to an empty set
         // means every row simply renders unmarked, which is what the panel did before.
         memoryRestated(50).catch(() => [] as number[]),
+        // Same limit and the same reasoning again: an unmarked row is a smaller loss than a panel
+        // that will not draw.
+        memorySuperseded(50).catch(() => [] as [number, number][]),
       ]);
       setTasks(t);
       setMemories(m);
       setModel(s);
       setRestated(new Set(restated));
+      setRevised(new Map(superseded));
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -325,6 +334,26 @@ export default function WorkPanel({
                           title="A newer fact above says this too. Agents are told the newest wording, so this one is not sent again."
                         >
                           restated more recently
+                        </span>
+                      </>
+                    )}
+                    {/* The same sentence with a different number in it. Unlike a restatement both
+                        of these are still sent to agents — the older one arrives labelled — because
+                        nothing here can tell a project changing its mind from a project with two
+                        regions, and quietly dropping the loser of that guess would cost a real
+                        decision. So the panel says which is later and leaves the choice where it
+                        belongs. Browse list only, for the same reason as the mark above. */}
+                    {query.trim() === "" && revised.has(m.id) && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span
+                          className="identra-memory__revised"
+                          title={`A later fact says: ${
+                            memories.find((x) => x.id === revised.get(m.id))
+                              ?.content ?? "something else"
+                          }`}
+                        >
+                          revised later
                         </span>
                       </>
                     )}

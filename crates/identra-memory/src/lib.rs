@@ -317,7 +317,15 @@ impl Store {
     /// over their agents' shoulder actually wants, and there is no query to ask.
     pub fn recent(&self, filter: &Filter, limit: usize) -> Result<Vec<Memory>, Error> {
         let mut rows = self.scoped_rows(filter)?;
-        rows.sort_by_key(|r| std::cmp::Reverse(r.created_at));
+        // Id breaks the tie, and it is not a tidiness fix. `created_at` is unix seconds, so two
+        // facts recorded in the same second sort equal and come back in whatever order the scan
+        // produced. Everything downstream reads this list as "newest first" and acts on it:
+        // `drop_near_duplicates` keeps the first wording it meets, and `superseded_mask` labels the
+        // later reading of a figure as the current one. Both of those give the opposite answer if
+        // the pair arrives reversed — an agent is told the old timeout is the new one — and it
+        // happens exactly when two facts land together, which is what one extraction pass over one
+        // session does.
+        rows.sort_by_key(|r| (std::cmp::Reverse(r.created_at), std::cmp::Reverse(r.id)));
         Ok(rows.into_iter().take(limit).map(Row::into_memory).collect())
     }
 
@@ -660,11 +668,205 @@ pub fn near_duplicate_mask(facts: &[String]) -> Vec<bool> {
     survives
 }
 
+/// The same sentence with the figures taken out, so two facts that differ only in a number compare
+/// as the same shape.
+///
+/// `shingles` alone cannot see this. "the request timeout is 30s" and "the request timeout is 60s"
+/// share no trigram containing the number, and with three words either side they can score under
+/// the near-duplicate threshold — which is correct there, because they are two different facts and
+/// [`near_duplicate_mask`] must keep both. It is the wrong answer here, where the question is not
+/// "are these the same fact" but "are these two versions of one".
+fn figure_blind(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut in_run = false;
+    for c in text.chars() {
+        if c.is_ascii_digit() {
+            if !in_run {
+                out.push('#');
+                in_run = true;
+            }
+        } else {
+            in_run = false;
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// For each fact, the index of the newer fact that supersedes it, or `None`.
+///
+/// The defect this answers is live and it is quiet. "the request timeout is 30s" and "the request
+/// timeout is 60s" are both stored — [`near_duplicate_mask`] keeps both deliberately, because a
+/// differing number is a differing fact and collapsing them would lose one — and both are then
+/// handed to every agent that connects, with nothing saying which one the project settled on. An
+/// agent reading that picks one, and there is no reason it picks the right one.
+///
+/// Facts arrive newest first, the same contract [`near_duplicate_mask`] has, so a lower index is a
+/// later fact. One supersedes another when they are the same sentence about the same thing and they
+/// disagree about a figure: same shape once the digits are blanked, and both naming figures that
+/// are not the same set.
+///
+/// **Both sides must name a figure.** "the timeout is 30s" against "the timeout is configurable"
+/// leaves the second one alone, because a fact that dropped the number is not a newer reading of
+/// it. That is the conservative direction and it is the direction this whole function errs in.
+///
+/// # What this deliberately does not do
+///
+/// It does not delete, and nothing downstream may treat it as permission to. A wrong supersede
+/// hides a true fact, and the two shapes are lexically identical: "the timeout is 30s" then "60s"
+/// is a project changing its mind, and "deploy the worker to us-east-1" then "us-east-2" is a
+/// project with two regions. Nothing in the text tells them apart, so the honest thing is to say
+/// which is newer and let the reader decide, not to guess and quietly drop the loser.
+///
+/// So a superseded fact is still sent. It is sent labelled, which is the whole of the fix: the
+/// agent gets both readings and is told which one is later, instead of getting both and being told
+/// nothing. It costs a few tokens and it cannot lose a decision, which is the right trade for a
+/// heuristic that is wrong some of the time and silent when it is.
+pub fn superseded_mask(facts: &[String]) -> Vec<Option<usize>> {
+    let shapes: Vec<(
+        std::collections::HashSet<String>,
+        std::collections::HashSet<String>,
+    )> = facts
+        .iter()
+        .map(|f| (shingles(&figure_blind(f)), digits(f)))
+        .collect();
+    let mut by = vec![None; facts.len()];
+    for (older, (older_shape, older_figures)) in shapes.iter().enumerate() {
+        if older_shape.is_empty() || older_figures.is_empty() {
+            continue;
+        }
+        // Newest first, so the search runs from index 0 and stops at the first hit: a fact is
+        // superseded by the most recent thing that disagrees with it, not by the oldest.
+        for (newer, (newer_shape, newer_figures)) in shapes.iter().enumerate().take(older) {
+            if newer_figures.is_empty() || newer_figures == older_figures {
+                continue;
+            }
+            let overlap = older_shape.intersection(newer_shape).count() as f32;
+            let union = older_shape.union(newer_shape).count() as f32;
+            if union > 0.0 && overlap / union >= NEAR_DUPLICATE {
+                by[older] = Some(newer);
+                break;
+            }
+        }
+    }
+    by
+}
+
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod recent_order_tests {
+    use super::{Filter, Scope, Store};
+
+    /// Two facts recorded in the same second must still come back in the order they happened.
+    ///
+    /// `created_at` is unix seconds, so one extraction pass over one session stamps every fact it
+    /// finds identically. Without a tiebreak the pair comes back in scan order, and every reader
+    /// downstream takes this list as newest first: the connect payload would tell an agent the old
+    /// timeout is the current one, which is worse than saying nothing.
+    #[test]
+    fn facts_recorded_in_the_same_second_still_come_back_newest_first() {
+        let store = Store::open_in_memory().unwrap();
+        let scope = Scope {
+            user_id: "proj".into(),
+            agent_id: "a".into(),
+            run_id: "r".into(),
+        };
+        store.add(&scope, "The request timeout is 30s").unwrap();
+        store.add(&scope, "The request timeout is 60s").unwrap();
+
+        let facts: Vec<String> = store
+            .recent(&Filter::default(), 10)
+            .unwrap()
+            .into_iter()
+            .map(|m| m.content)
+            .collect();
+        assert_eq!(facts[0], "The request timeout is 60s", "{facts:?}");
+    }
+}
+
+#[cfg(test)]
+mod supersede_tests {
+    use super::superseded_mask;
+
+    fn v(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// The defect this whole pass exists for, in the exact words the plan reported it in. Both rows
+    /// are in the store, both are handed to every agent that connects, and until this ran there was
+    /// nothing anywhere saying which one the project settled on.
+    #[test]
+    fn a_changed_figure_marks_the_older_reading_as_older() {
+        // Newest first, which is the order `recent` hands them back in.
+        let facts = v(&[
+            "The request timeout is 60s",
+            "The API issues JWT bearer tokens rather than server side sessions",
+            "The request timeout is 30s",
+        ]);
+        let by = superseded_mask(&facts);
+        assert_eq!(
+            by[0], None,
+            "the newest reading is not superseded by anything"
+        );
+        assert_eq!(by[1], None, "an unrelated fact is left alone");
+        assert_eq!(by[2], Some(0), "the older timeout points at the newer one");
+    }
+
+    /// Both sides have to name a figure. A later fact that stopped mentioning the number is not a
+    /// newer reading of it, and treating it as one would label a true fact stale on no evidence.
+    #[test]
+    fn dropping_the_number_does_not_supersede_the_fact_that_had_one() {
+        let facts = v(&[
+            "The request timeout is configurable per route",
+            "The request timeout is 30s",
+        ]);
+        assert_eq!(superseded_mask(&facts)[1], None);
+    }
+
+    /// Agreeing about the figure is restatement, which is `near_duplicate_mask`'s job and not this
+    /// one. Marking it superseded here would put "an earlier reading" on a fact nothing disagrees
+    /// with.
+    #[test]
+    fn the_same_figure_said_twice_is_not_a_supersede() {
+        let facts = v(&["the request timeout is 30s", "The request timeout is 30s."]);
+        assert_eq!(superseded_mask(&facts), vec![None, None]);
+    }
+
+    /// Two facts that both happen to carry numbers and are about different things must not be
+    /// chained together. This is the failure that would matter: it is silent, and it would put a
+    /// stale label on a decision nobody revisited.
+    #[test]
+    fn different_facts_that_both_carry_numbers_are_left_alone() {
+        let facts = v(&[
+            "The request timeout is 60s",
+            "Postgres 16 runs in docker for local development",
+        ]);
+        assert_eq!(superseded_mask(&facts), vec![None, None]);
+    }
+
+    /// Superseded by the most recent disagreement, not the oldest. A fact revised twice should
+    /// point at what the project believes now.
+    #[test]
+    fn the_newest_disagreement_wins() {
+        let facts = v(&[
+            "The request timeout is 90s",
+            "The request timeout is 60s",
+            "The request timeout is 30s",
+        ]);
+        let by = superseded_mask(&facts);
+        assert_eq!(by[1], Some(0));
+        assert_eq!(
+            by[2],
+            Some(0),
+            "not Some(1): the newest reading is the current one"
+        );
+    }
 }
 
 #[cfg(test)]

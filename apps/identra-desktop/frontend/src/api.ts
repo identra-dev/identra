@@ -219,6 +219,15 @@ export const memoryList = (limit?: number) =>
 export const memoryRestated = (limit?: number) =>
   invoke<number[]>("memory_restated", { limit: limit ?? null });
 
+// Which listed facts a later one revises, as [staleId, currentId]. A different question from
+// restatement: this is the same sentence with a different figure, so both rows are true statements
+// and only one of them is current. The pair rather than the id alone, because a row marked out of
+// date with no way to see what replaced it sends the reader hunting.
+//
+// Same limit as the list it describes, or the marks land on the wrong rows.
+export const memorySuperseded = (limit?: number) =>
+  invoke<[number, number][]>("memory_superseded", { limit: limit ?? null });
+
 export const memorySearch = (query: string, limit?: number) =>
   invoke<Memory[]>("memory_search", { query, limit: limit ?? null });
 
