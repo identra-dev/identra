@@ -2,11 +2,11 @@
 
 # Identra
 
-**A desktop canvas for running coding agents.**
+**A desktop shell for running coding agents, with a memory they open already holding.**
 
-You drop an agent onto the board, it runs in a real terminal inside a node, you wire nodes
-together, and Identra keeps a memory of what happened so the next agent you open already
-knows the project.
+You open an agent in a tab, it runs in a real terminal, you connect the ones that should read
+each other's work, and Identra keeps a memory of what happened — which the next agent receives
+in its opening handshake, without calling a tool to ask.
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-E95420.svg)](#requirements)
@@ -23,7 +23,7 @@ knows the project.
 
 </div>
 
-Rust engine, Tauri shell, React canvas. Apache-2.0.
+Rust engine, Tauri shell, React front end. Apache-2.0.
 
 ---
 
@@ -78,13 +78,13 @@ claude --version   # if this works, Identra can run it
 ```
 
 Identra also runs [codex](https://github.com/openai/codex), gemini, and opencode, and you can
-mix them on one canvas. Claude Code is the one to start with: a project's memory reaches an
+mix them in one workspace. Claude Code is the one to start with: a project's memory reaches an
 agent over the MCP handshake, and it is the CLI that surfaces what arrives there, so it is the
 one where an agent opens already knowing what the project has learned. The others work, they
 just start that first session blank.
 
-Without any of them a node still opens. It names the agents you do have rather than pretending
-to work, but you will not see one run.
+Without any of them a tab still opens. It names the agents you do have rather than pretending to
+work, but you will not see one run.
 
 ## Why i built this
 
@@ -94,29 +94,30 @@ approach we already tried and threw away, the constraints that are not written d
 The agent is sharp in the moment and blank the next morning.
 
 So the context ends up scattered across a dozen terminal tabs and my own head, and none of it
-survives. Identra is my fix for that. The canvas is where the work happens. The memory layer
-sits underneath it and quietly keeps the parts worth keeping, then hands them back to the next
-agent so nobody starts from zero.
+survives. Identra is my fix for that. The shell is where the work happens. The memory layer sits
+underneath it and quietly keeps the parts worth keeping, then hands them back to the next agent
+so nobody starts from zero.
 
 ## What it does
 
-- Drop an agent node on an infinite canvas. It spawns a real `claude` or `codex` process in a
-  terminal you can type into. No shell wrapper, no fake sandbox, the actual CLI on your machine.
+- Open an agent from the sidebar and it becomes a tab. It spawns a real `claude` or `codex`
+  process in a terminal you can type into. No shell wrapper, no fake sandbox, the actual CLI on
+  your machine. Split the pane to watch two of them at once.
 - Type what you want done into the command bar (`⌘K` / `Ctrl+K` from anywhere, including from
-  inside a node's terminal) and an orchestrator seat breaks the work up,
-  spawns the helper nodes it needs, wires them, and puts the pieces on a shared task board you
-  can watch. Wired agents message each other, split work, and hand results back over a local
-  bus. An edge between two nodes is the permission: no wire, no shared context.
+  inside an agent's terminal) and an orchestrator seat breaks the work up, opens the helpers it
+  needs, connects them, and puts the pieces on a shared task board you can watch. Connected
+  agents message each other, split work, and hand results back over a local bus. The connection
+  is the permission: no connection, no shared context. Every one of them is listed under Links,
+  including any an agent made for itself, and any of them can be revoked there.
 - A workspace is a folder, usually your repo. Open one you have, make an empty one, or paste a
-  git URL and Identra clones it. Each workspace keeps its own canvas, board, memory, and
-  wallpaper, and the picker shows each board at a glance.
-- Press Run and Identra starts your project's own dev command in a node, reads the local URL
-  off the server's banner, and one click opens the page in a browser node beside it.
-- Reading a conversation in a tile is squinting, so every node expands to the full window over
-  the same terminal. Drop a file on the canvas to view it, browse and search the workspace from
-  the Files panel, and agents can open a file node themselves to show you what they made.
-- The canvas saves itself. Close the app, open it next week, your nodes, layout, and each
-  agent's own conversation come back exactly where you left them.
+  git URL and Identra clones it. Each workspace keeps its own agents, board, memory, and
+  wallpaper, and the picker shows what is open in each at a glance.
+- Open the dev server and Identra starts your project's own dev command in a tab, reads the
+  local URL off the server's banner, and one click opens the page in a browser tab beside it.
+- Drop a file on the window to view it in a tab, browse and search the workspace from the Files
+  column, and agents can open a file themselves to show you what they made.
+- The workspace saves itself. Close the app, open it next week, your agents, your connections
+  and each agent's own conversation come back where you left them.
 - A memory layer watches your sessions and pulls out the durable facts: decisions, rejected
   directions, conventions. When you open a fresh agent in a project Identra already knows, it
   shows what it remembers before the agent's first prompt.
@@ -130,8 +131,8 @@ per workspace.
 
 ### How much agents do without asking
 
-An approval prompt is reasonable once and unusable four times at once, which is what a canvas of
-parallel agents turns it into. Worse, the orchestrator runs headless, so a prompt it stops on is one
+An approval prompt is reasonable once and unusable four times at once, which is what a shell full
+of parallel agents turns it into. Worse, the orchestrator runs headless, so a prompt it stops on is one
 nobody can see: Codex opens a folder it has not met on "Do you trust the contents of this
 directory?" and waits there, and the instruction you typed goes into that menu.
 
@@ -141,7 +142,7 @@ working when they open and they connect to each other on their own.
 
 **That is a real trade and it is on by default, so it is worth saying plainly.** An agent running
 like this can reach anything you can. Run Identra on work you have committed. Settings has one
-switch that puts every prompt back, and then you answer them in the node like any other terminal.
+switch that puts every prompt back, and then you answer them in the tab like any other terminal.
 
 ## Requirements
 
@@ -176,8 +177,8 @@ just doctor      # check your machine is ready
 just dev         # build and launch with hot reload
 ```
 
-First launch builds the Rust side, so give it a minute. After that, right-click the canvas or
-use the dock to add a Codex node, and start typing.
+First launch builds the Rust side, so give it a minute. After that, open Codex from the sidebar
+and start typing.
 
 `just build` produces the release bundles for whatever OS you are on. Run it from
 `apps/identra-desktop` if you call `cargo tauri build` yourself: the frontend build script it
@@ -190,22 +191,21 @@ Identra is a small Rust engine with thin shells on top of it.
 ```
 identra/
   crates/
-    identra-core     the engine: PTY/terminal manager, canvas store, agent detection
+    identra-core     the engine: PTY/terminal manager, workspace store, agent detection
     identra-memory   the memory layer: fact extraction, local embeddings, history
-    identra-mcp      the context bus: an MCP server wired agents share context through
+    identra-mcp      the context bus: an MCP server connected agents share context through
   apps/
-    identra-desktop  Tauri v2 + React: the canvas, the nodes, the dock
+    identra-desktop  Tauri v2 + React: the shell, the panes, the memory panel
   presets/
     identra-agents   agent presets and orchestration recipes
   docs/             architecture and design notes
 ```
 
-The engine owns the hard parts. A node in the UI is a thin client that talks to `identra-core`
+The engine owns the hard parts. A pane in the UI is a thin client that talks to `identra-core`
 over a small typed command channel (`terminal:start`, `terminal:input`, and so on). Output
-streams back with a sequence number so a node can reattach after a reload without dropping or
-duplicating a line. The canvas is the source of truth for layout, and it saves to
-`.identra/canvas.json` in your project with a debounced atomic write, so a fast drag never
-thrashes your disk.
+streams back with a sequence number so a pane can reattach after a reload without dropping or
+duplicating a line. What each workspace holds — its agents and the connections between them —
+saves to `.identra/canvas.json` with a debounced atomic write.
 
 Memory is its own crate. After a session it runs one extraction pass, dedupes by content hash,
 embeds locally with fastembed, and stores the result in a single SQLite file with a vector
@@ -215,7 +215,7 @@ it to.
 
 ## Where your data lives
 
-- Canvas state: `.identra/canvas.json` inside each project (gitignored by default).
+- What each workspace holds: `.identra/canvas.json` inside each project (gitignored by default).
 - Memory: a local SQLite database. Nothing leaves your machine.
 - The embedding model: inside the app. A release build ships it, so recall works by meaning the
   first time you open Identra, with nothing fetched and nothing to wait for. Identra downloads
@@ -231,7 +231,7 @@ so here is the whole list rather than a promise that it is tidy.
 
 | Path | What it is | Yours already? |
 |------|-----------|----------------|
-| `.identra/canvas.json` | Node layout, wallpaper, the seat | No, Identra's |
+| `.identra/canvas.json` | Which agents are open, which are connected, wallpaper, the seat | No, Identra's |
 | `.identra/memory.db` | What the project has learned, plus `-wal` and `-shm` sidecars while it is open | No, Identra's |
 | `.identra/bus.db` | The task board and the message queue, same two sidecars | No, Identra's |
 | `.identra/opencode.json` | Bus config, kept out of the project root because opencode is pointed at it by env | No, Identra's |
@@ -267,12 +267,13 @@ Identra uses a `justfile` for everything. Run `just` to list them.
 
 ## Status
 
-Early, and honest about it. What works today: agent nodes each running their own real CLI in a
-persistent canvas, the command bar driving an orchestrator seat that spawns and wires helpers,
-a shared task board, workspaces with clone and per-board wallpaper, the dev server Run button
-with a live browser preview, full-window focus on any node, file viewing on the canvas, the
-Files panel with search, and auto update. Connection edges let two wired agents share context
-through the bus (draw the wire, then launch, since a CLI reads its MCP servers at startup).
+Early, and honest about it. What works today: agents each running their own real CLI as tabs in a
+three-column shell you can split, the command bar driving an orchestrator seat that opens and
+connects helpers, a shared task board, workspaces with clone and per-workspace wallpaper, the dev
+server with a live browser preview, file viewing, the Files column with search, and auto update.
+A connection lets two agents share context through the bus (connect them, then launch, since a
+CLI reads its MCP servers at startup), and the Links column lists every connection with who made
+it and a way to revoke it.
 Memory is on the recall path: agents read and write it through the bus, and the work panel
 shows you every fact the project holds, because memory only agents can read is memory you
 cannot check or correct.
@@ -288,7 +289,7 @@ they are, because the model's ranking is good but its scores cannot tell a real 
 question about something this project never touched. Judging that is the agent's job, and it is
 better at it than a threshold would be.
 
-The browser node ships as a live preview (see `docs/browser-bridge.md` for why the agent-drive half
+The browser tab ships as a live preview (see `docs/browser-bridge.md` for why the agent-drive half
 needs Chromium).
 
 If something is rough, it is because I would rather ship the core working than a wide surface half

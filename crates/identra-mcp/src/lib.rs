@@ -128,6 +128,7 @@ fn edged(a: &str, b: &str, edges: &[Edge]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use identra_core::canvas::Grantor;
     use std::collections::HashMap;
 
     /// A canvas' worth of terminals with no PTY: fixed snapshots, nothing running.
@@ -158,6 +159,7 @@ mod tests {
             id: format!("{source}-{target}"),
             source: source.into(),
             target: target.into(),
+            by: Grantor::You,
         }
     }
 

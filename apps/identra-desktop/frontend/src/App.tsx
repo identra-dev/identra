@@ -1,47 +1,32 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import logo from "./assets/identra.png";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import {
-  ReactFlow,
-  Background,
-  Controls,
-  MiniMap,
-  addEdge,
-  applyEdgeChanges,
-  applyNodeChanges,
-  type Connection,
-  type Edge as FEdge,
-  type EdgeChange,
-  type Node,
-  type NodeChange,
-  type Viewport,
-} from "@xyflow/react";
-import "@xyflow/react/dist/style.css";
 import "@xterm/xterm/css/xterm.css";
-import AgentNode, { type AgentNodeData } from "./AgentNode";
-import BrowserNode from "./BrowserNode";
-import FileNode from "./FileNode";
 import FilesPanel from "./FilesPanel";
-import NoteNode from "./NoteNode";
 import Onboarding from "./Onboarding";
+import Pane from "./Pane";
 import WorkspacePicker from "./WorkspacePicker";
 import SettingsPanel from "./SettingsPanel";
 import WorkPanel from "./WorkPanel";
 import WorkspaceMenu from "./WorkspaceMenu";
 import CommandBar, { MOD_LABEL, type DispatchState } from "./CommandBar";
-import FocusView from "./FocusView";
-import { REFIT_EVENT } from "./attachTerminal";
+import ConnectionsPanel from "./ConnectionsPanel";
 import WallpaperPicker from "./WallpaperPicker";
 import { AgentIcon } from "./icons";
-import { tidyPositions } from "./tidy";
 import {
-  backgroundCss,
-  DEFAULT_WALLPAPER,
-  dotColor,
-  needsScrim,
-} from "./wallpaper";
+  clearNode,
+  closeLeaf,
+  leaf,
+  leaves,
+  setNode,
+  splitLeaf,
+  stepLeaf,
+  type Pane as PaneTree,
+} from "./layout";
+import { useNodeState } from "./nodeState";
+import { backgroundCss, DEFAULT_WALLPAPER, needsScrim } from "./wallpaper";
 import {
   composeDispatch,
   planLine,
@@ -75,20 +60,15 @@ import {
   type CanvasCommand,
   type CanvasNode,
   type CanvasResult,
+  type Edge,
+  type Grantor,
+  type Viewport,
   type Wallpaper,
   type WorkspaceMeta,
 } from "./api";
 
-type FNode = Node<AgentNodeData>;
-
-const nodeTypes = {
-  agent: AgentNode,
-  browser: BrowserNode,
-  note: NoteNode,
-  file: FileNode,
-};
-// Long enough that a drag is one write rather than sixty, short enough that the window I have to
-// flush on close stays small.
+// Long enough that a burst of changes is one write rather than sixty, short enough that the window
+// I have to flush on close stays small.
 const SAVE_DEBOUNCE_MS = 400;
 // The longest the window waits for its final save before closing anyway. Long enough that an
 // ordinary write to a local file finishes inside it many times over, short enough that a user who
@@ -97,93 +77,89 @@ const CLOSE_FLUSH_MAX_MS = 2000;
 // How often the command bar re-reads the board and the seat's state. Slow enough to be free, fast
 // enough that "it is asking you something" does not sit unnoticed. Only runs while a seat exists.
 const SEAT_POLL_MS = 2500;
-// How often the topbar re-reads how many facts the project has learned, for the badge and the
+// How often the shell re-reads how many facts the project has learned, for the badge and the
 // one-time reveal. Matches the panel's own poll: two small reads a few seconds apart cost nothing.
 const MEMORY_POLL_MS = 2000;
 // The headless orchestrator still runs inside a PTY, and a PTY has a size whether or not anyone is
 // looking at it. This is only the size it is born at: the moment the command center pane mounts it
-// re-sizes the PTY to the box actually showing it, the same as any node. What these have to be is
+// re-sizes the PTY to the box actually showing it, the same as any pane. What these have to be is
 // big enough that the CLI's first screen, drawn before the pane has attached, is not folded into
 // nonsense that then has to be re-wrapped.
 const SEAT_COLS = 120;
 const SEAT_ROWS = 40;
+// What a node's saved box used to be. Nothing draws at this size any more — a pane is whatever the
+// split tree gives it — but the fields are still in the file, and writing a plausible number keeps
+// a canvas exported from here readable by anything that still reads them.
 const DEFAULT_W = 480;
 const DEFAULT_H = 320;
 
-// Every agent kind renders through the one AgentNode; the kind rides in node data. A saved
-// claude or gemini node must reload as itself, so the real kind flows both ways here.
-function toFlow(n: CanvasNode): FNode {
-  return {
-    id: n.id,
-    type:
-      n.kind === "browser" || n.kind === "note" || n.kind === "file"
-        ? n.kind
-        : "agent",
-    position: { x: n.x, y: n.y },
-    data: { title: n.title, cwd: n.cwd, kind: n.kind, locked: n.locked },
-    style: { width: n.width || DEFAULT_W, height: n.height || DEFAULT_H },
-  };
-}
+// The right column's modes. Files and the work panel already existed as slide-overs; docking them
+// is the change. Connections is new, and it is not a convenience: it is the only place a grant of
+// agent-to-agent access can now be seen. Changes and Review are named in the plan and are not
+// built, and an empty tab that says "coming soon" is worse than a column with three honest ones.
+type RightMode = "work" | "files" | "connections";
 
-function toCanvasNode(n: FNode): CanvasNode {
-  return {
-    id: n.id,
-    kind: n.data.kind,
-    x: n.position.x,
-    y: n.position.y,
-    width: Number(n.style?.width) || DEFAULT_W,
-    height: Number(n.style?.height) || DEFAULT_H,
-    title: n.data.title || n.data.kind,
-    cwd: n.data.cwd ?? null,
-    locked: n.data.locked === true,
-  };
-}
+// Whether this workspace has been told its canvas is gone. Kept in the browser's own storage rather
+// than in the engine, because it is a fact about what this person has read and not about the
+// project: no agent needs it, nothing else reads it, and putting it in canvas.json would mean a
+// migration for a sentence.
+//
+// ponytail: localStorage, per workspace. If the notice ever has to survive a reinstall, it moves to
+// the same place `memory_reveal_once` lives.
+const CANVAS_NOTICE_KEY = "identra:canvas-gone:";
 
 export default function App() {
   const [workspace, setWorkspace] = useState<WorkspaceMeta | null>(null);
-  const [nodes, setNodes] = useState<FNode[]>([]);
-  const [edges, setEdges] = useState<FEdge[]>([]);
+  const [nodes, setNodes] = useState<CanvasNode[]>([]);
+  const [edges, setEdges] = useState<Edge[]>([]);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
-  const [panelOpen, setPanelOpen] = useState(false);
-  // The Work panel opens on this tab. A manual open lands on tasks; the first-fact reveal lands on
-  // memory, because memory is the thing it is revealing.
-  const [panelTab, setPanelTab] = useState<"tasks" | "memory">("tasks");
+  // Which mode the right column is showing, or null when it is collapsed.
+  const [right, setRight] = useState<RightMode | null>(null);
   // How many facts this project has learned. Drives the ambient badge and the one-time reveal, and
-  // is polled whether or not the panel is open, so the badge is right even while it is closed.
+  // is polled whether or not the column is open, so the badge is right even while it is closed.
   const [memoryCount, setMemoryCount] = useState(0);
-  const [filesOpen, setFilesOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   // The dev command this workspace declares, or null. Existence is what the Run button keys on.
   const [devCmd, setDevCmd] = useState<string[] | null>(null);
-  // The node open at full window size, or null. One at a time by construction.
-  const [focused, setFocused] = useState<string | null>(null);
-  // Set when a write to disk fails. The board is on screen and not saved, and the only wrong move
-  // is to say nothing.
+  // Set when a write to disk fails. The work is on screen and not saved, and the only wrong move is
+  // to say nothing.
   const [saveError, setSaveError] = useState<string | null>(null);
-  const viewport = useRef<Viewport>({ x: 0, y: 0, zoom: 1 });
-  // scheduleSave persists the whole canvas but each handler only has its own slice; these refs
+  // Said once per workspace, on the first open after the canvas went away.
+  const [canvasNotice, setCanvasNotice] = useState(false);
+
+  // The centre column. Session-only by design: see the note at the top of layout.ts.
+  const [tree, setTree] = useState<PaneTree>(() => leaf("pane-0"));
+  const [focusLeaf, setFocusLeaf] = useState("pane-0");
+  const treeRef = useRef<PaneTree>(tree);
+  treeRef.current = tree;
+  const focusLeafRef = useRef(focusLeaf);
+  focusLeafRef.current = focusLeaf;
+
+  // scheduleSave persists the whole workspace but each handler only has its own slice; these refs
   // hold the latest of both so a save always writes a consistent nodes+edges pair.
-  const nodesRef = useRef<FNode[]>([]);
-  const edgesRef = useRef<FEdge[]>([]);
+  const nodesRef = useRef<CanvasNode[]>([]);
+  const edgesRef = useRef<Edge[]>([]);
   const titleRef = useRef("");
-  // Which node holds the orchestrator seat. State because the canvas draws it, and a ref alongside
-  // for the same reason the nodes have one: snapshot() runs outside render and has to write the
-  // current seat, not the one from the render that scheduled the save.
+  // The viewport is dead as a concept and alive as a field: nothing pans or zooms any more, but
+  // canvas.json still carries one and a workspace last saved by v0.1.2 has a real value in it.
+  // Round-tripping what was read keeps this window from being the thing that rewrote it.
+  const viewportRef = useRef<Viewport>({ x: 0, y: 0, zoom: 1 });
+  // Which node holds the orchestrator seat. State because the bar draws it, and a ref alongside for
+  // the same reason the nodes have one: snapshot() runs outside render and has to write the current
+  // seat, not the one from the render that scheduled the save.
   const [seat, setSeat] = useState<string | null>(null);
-  // The display name of whatever agent is holding the seat, for the bar's label. Set when the seat
-  // is stood up; there is no node to read it back off any more.
+  // The display name of whatever agent is holding the seat, for the bar's label.
   const [seatAgent, setSeatAgent] = useState<string | null>(null);
   const seatRef = useRef<string | null>(null);
-  // The background this workspace wears. State because the canvas draws it, a ref so snapshot()
-  // writes the current choice rather than the one from the render that scheduled the save.
+  // The background this workspace wears. It is behind the columns now rather than under nodes, so
+  // it shows at the edges and through the gaps; the field and the picker are unchanged.
   const [wallpaper, setWallpaper] = useState<Wallpaper>(DEFAULT_WALLPAPER);
   const wallpaperRef = useRef<Wallpaper>(DEFAULT_WALLPAPER);
-  // Where the wallpaper popover is open, or null. Set by right-clicking the canvas background.
   const [wallMenu, setWallMenu] = useState<{ x: number; y: number } | null>(
     null,
   );
   const saveTimer = useRef<number | undefined>(undefined);
-  // Is the board on screen different from the board on disk. This is what the close handler asks.
+  // Is what is on screen different from what is on disk. This is what the close handler asks.
   const unsaved = useRef(false);
   // The canvas-command handler runs outside React's render, so it reads agents from a ref rather
   // than closing over state that would be stale by the time an agent calls.
@@ -197,7 +173,7 @@ export default function App() {
   }, []);
 
   // The first-run panel offers a recheck so a user who just installed an agent does not have to
-  // relaunch. This clears the probe cache and refreshes what both the dock and the panel read.
+  // relaunch. This clears the probe cache and refreshes what both the sidebar and the panel read.
   // It returns the promise so the panel can show a checking state and a failure, rather than a
   // button that eats the click in silence.
   const recheckAgents = useCallback(async () => {
@@ -208,8 +184,8 @@ export default function App() {
 
   // Backspace outside a text field is history-back in WebKit, and the shell's history is the app
   // itself: one stray keypress with nothing focused and the window walks backward out of Identra.
-  // Editable targets keep the key, which covers every input here including xterm's hidden
-  // textarea, so typing is untouched and only the navigation gesture dies.
+  // Editable targets keep the key, which covers every input here including xterm's hidden textarea,
+  // so typing is untouched and only the navigation gesture dies.
   useEffect(() => {
     const guard = (e: KeyboardEvent) => {
       if (e.key !== "Backspace") return;
@@ -224,29 +200,7 @@ export default function App() {
     return () => window.removeEventListener("keydown", guard);
   }, []);
 
-  // A terminal and an iframe both need the wheel for their own scrolling, so they swallow it, which
-  // leaves you unable to zoom the canvas while the pointer is over a node. Holding the modifier
-  // turns that off for as long as it is down: the class stops matching, and the wheel reaches the
-  // canvas. Cheaper than hunting for empty space, and it is the same key you already hold to zoom.
-  const [wheelToCanvas, setWheelToCanvas] = useState(false);
-  useEffect(() => {
-    const down = (e: KeyboardEvent) =>
-      (e.metaKey || e.ctrlKey) && setWheelToCanvas(true);
-    const up = (e: KeyboardEvent) =>
-      !e.metaKey && !e.ctrlKey && setWheelToCanvas(false);
-    // Releasing the key outside the window never fires keyup, which would leave it stuck on.
-    const blur = () => setWheelToCanvas(false);
-    window.addEventListener("keydown", down);
-    window.addEventListener("keyup", up);
-    window.addEventListener("blur", blur);
-    return () => {
-      window.removeEventListener("keydown", down);
-      window.removeEventListener("keyup", up);
-      window.removeEventListener("blur", blur);
-    };
-  }, []);
-
-  // Opening is what makes a workspace active in the engine: it repoints the canvas, and writes the
+  // Opening is what makes a workspace active in the engine: it repoints the window, and writes the
   // bus config and the agent guide into that folder so any agent launched here can find its peers.
   const openWorkspace = useCallback(async (w: WorkspaceMeta) => {
     // Two lookups, because there are two kinds of id. A workspace Identra made is found by slug in
@@ -255,44 +209,50 @@ export default function App() {
     const canvas = isAdopted(w)
       ? await workspaceOpenRecent(w.path)
       : await workspaceOpen(w.slug);
-    const loaded = canvas.nodes.map(toFlow);
-    nodesRef.current = loaded;
+    nodesRef.current = canvas.nodes;
     edgesRef.current = canvas.edges;
+    setEdges(canvas.edges);
     titleRef.current = canvas.title;
-    // Opening a workspace always starts with no seat, and it is worth saying why rather than
-    // leaving the check that used to be here. That check asked whether the saved seat id was still
-    // a node on the canvas, which made sense when the orchestrator was one. It is headless now, so
-    // it is never in `canvas.nodes` and the answer was always no.
-    //
-    // The honest version is the same answer for a better reason: a seat is a running process, and
-    // processes do not survive the app closing. A restored id could only ever name a PTY that is
-    // gone, and the first instruction stands a fresh one up anyway.
+    viewportRef.current = canvas.viewport;
+    // Opening a workspace always starts with no seat. A seat is a running process, and processes do
+    // not survive the app closing, so a restored id could only ever name a PTY that is gone — and
+    // the first instruction stands a fresh one up anyway.
     seatRef.current = null;
     setSeat(null);
     setSeatAgent(null);
     wallpaperRef.current = canvas.wallpaper;
     setWallpaper(canvas.wallpaper);
-    setNodes(loaded);
-    setEdges(canvas.edges);
-    viewport.current = canvas.viewport;
+    setNodes(canvas.nodes);
+    // One pane, showing whatever was made first. Nodes become tabs in the order they were created,
+    // which is the only ordering the file still carries now that positions are not read.
+    const first = canvas.nodes[0]?.id ?? null;
+    setTree(leaf("pane-0", first));
+    setFocusLeaf("pane-0");
     setWorkspace(w);
+    // The one thing this window knows and the user does not: their arrangement is gone on purpose.
+    // A canvas with everything at the origin was never arranged, so it gets no notice.
+    const arranged = canvas.nodes.some((n) => n.x !== 0 || n.y !== 0);
+    const key = CANVAS_NOTICE_KEY + w.slug;
+    setCanvasNotice(arranged && window.localStorage.getItem(key) === null);
     // Whether this project declares a dev command decides whether the Run control exists at all.
     // Probed per open, because it is a property of the folder, not of the app.
     setDevCmd(null);
     void devCommand().then(setDevCmd, () => setDevCmd(null));
   }, []);
 
+  const dismissCanvasNotice = useCallback(() => {
+    setCanvasNotice(false);
+    if (workspace !== null) {
+      window.localStorage.setItem(CANVAS_NOTICE_KEY + workspace.slug, "read");
+    }
+  }, [workspace]);
 
-  // The whole board, from the refs, so a save always writes a consistent nodes+edges pair.
+  // The whole workspace, from the refs, so a save always writes a consistent nodes+edges pair.
   const snapshot = useCallback(
     () => ({
-      nodes: nodesRef.current.map(toCanvasNode),
-      edges: edgesRef.current.map((e) => ({
-        id: e.id,
-        source: e.source,
-        target: e.target,
-      })),
-      viewport: viewport.current,
+      nodes: nodesRef.current,
+      edges: edgesRef.current,
+      viewport: viewportRef.current,
       title: titleRef.current,
       seat: seatRef.current,
       wallpaper: wallpaperRef.current,
@@ -300,10 +260,9 @@ export default function App() {
     [],
   );
 
-  // Write now and wait for it. A failure here is the user's layout not being on disk, so it goes on
-  // the screen: this used to be a bare `void canvasSave(...)`, which meant a full disk or a
-  // read-only workspace looked exactly like a successful save until the app was reopened and the
-  // work was gone.
+  // Write now and wait for it. A failure here is the user's work not being on disk, so it goes on
+  // the screen: a bare `void canvasSave(...)` would make a full disk or a read-only workspace look
+  // exactly like a successful save until the app was reopened and the work was gone.
   const saveNow = useCallback(async () => {
     window.clearTimeout(saveTimer.current);
     try {
@@ -311,28 +270,31 @@ export default function App() {
       unsaved.current = false;
       setSaveError(null);
     } catch (e) {
-      // Leave unsaved set. The board on screen is still not the board on disk, and the next close
+      // Leave unsaved set. What is on screen is still not what is on disk, and the next close
       // should try again rather than assume this one counted.
       setSaveError(String(e));
     }
   }, [snapshot]);
 
-  // Back to the picker, which had no way in from here at all.
-  //
-  // The workspace menu could swap you to another workspace but never out to the list, so the home
-  // screen was somewhere you passed through once at launch and could not return to. Getting back to
-  // it meant restarting the app, which is a strange thing to have to do to see a list of your own
-  // projects.
+  // Debounced atomic save. The engine writes atomically; we just avoid thrashing.
+  const scheduleSave = useCallback(() => {
+    unsaved.current = true;
+    window.clearTimeout(saveTimer.current);
+    saveTimer.current = window.setTimeout(() => {
+      void saveNow();
+    }, SAVE_DEBOUNCE_MS);
+  }, [saveNow]);
+
+  // Back to the picker.
   //
   // Everything this clears is deliberate. The nodes and edges go because the next thing rendered is
   // the picker and stale ones would flash up under whatever is opened next. The seat goes because it
   // names a PTY belonging to the workspace being left. What does not happen here is killing the
-  // agents: they are this workspace's processes and they keep running, the same as they do while you
-  // are looking at another node, so coming back finds them where you left them.
+  // agents: they are this workspace's processes and they keep running, so coming back finds them
+  // where you left them.
   const goHome = useCallback(async () => {
-    // The board on screen may be newer than the board on disk. Leaving is exactly the moment that
-    // matters, and unlike closing there is no bound needed: nothing is waiting on it and the picker
-    // can afford one write.
+    // What is on screen may be newer than what is on disk. Leaving is exactly the moment that
+    // matters, and unlike closing there is no bound needed: nothing is waiting on it.
     await saveNow().catch(() => {});
     setWorkspace(null);
     setNodes([]);
@@ -342,166 +304,12 @@ export default function App() {
     seatRef.current = null;
     setSeat(null);
     setSeatAgent(null);
-    setFocused(null);
-    setPanelOpen(false);
-    setFilesOpen(false);
+    setRight(null);
     setSettingsOpen(false);
+    setTree(leaf("pane-0"));
+    setFocusLeaf("pane-0");
   }, [saveNow]);
 
-  // Debounced atomic save. The engine writes atomically; we just avoid thrashing on drag.
-  const scheduleSave = useCallback(() => {
-    unsaved.current = true;
-    window.clearTimeout(saveTimer.current);
-    saveTimer.current = window.setTimeout(() => {
-      void saveNow();
-    }, SAVE_DEBOUNCE_MS);
-  }, [saveNow]);
-
-  // Straighten the board. Positions only: nothing is started, stopped, or rewired, so this is
-  // always safe to press. It lays out into the top left of what is currently on screen rather than
-  // at the canvas origin, because a canvas that has been panned would otherwise tidy itself out of
-  // view and look like it had deleted everything.
-  const [minimapOn, setMinimapOn] = useState(false);
-  const tidy = useCallback(() => {
-    const vp = viewport.current;
-    const origin = { x: -vp.x / vp.zoom + 40, y: -vp.y / vp.zoom + 40 };
-    const placed = new Map(
-      tidyPositions(
-        nodesRef.current.map((n) => ({
-          id: n.id,
-          position: n.position,
-          width: Number(n.style?.width) || DEFAULT_W,
-          height: Number(n.style?.height) || DEFAULT_H,
-        })),
-        origin,
-      ).map((p) => [p.id, p]),
-    );
-    setNodes((cur) => {
-      const next = cur.map((n) => {
-        const at = placed.get(n.id);
-        return at ? { ...n, position: { x: at.x, y: at.y } } : n;
-      });
-      nodesRef.current = next;
-      scheduleSave();
-      return next;
-    });
-  }, [scheduleSave]);
-
-  // Take the board out to a file, or bring one in.
-  //
-  // Export sends what is on screen rather than what is on disk, so a change made in the last few
-  // hundred milliseconds is in the file too. Both report through the save banner, which is already
-  // the place this window says a canvas operation failed.
-  const exportCanvas = useCallback(async () => {
-    try {
-      await canvasExport(snapshot());
-    } catch (e) {
-      setSaveError(`That canvas was not exported: ${String(e)}`);
-    }
-  }, [snapshot]);
-
-  const importCanvas = useCallback(async () => {
-    // Asked before the dialog opens, not after a file is chosen. Confirming a destructive action
-    // and then being asked to pick the file is the wrong order: by then it reads as already decided.
-    if (
-      nodesRef.current.length > 0 &&
-      !window.confirm(
-        "Import a canvas?\n\nThis replaces the board in this workspace. The agents running here stop, and their conversations are forgotten.",
-      )
-    ) {
-      return;
-    }
-    try {
-      const imported = await canvasImport();
-      if (imported === null) return; // cancelled, nothing to say
-      // Stop what is running before the nodes go. These are the nodes being replaced, so the same
-      // teardown a close does has to happen here or their PTYs outlive the board they belonged to.
-      for (const n of nodesRef.current) {
-        void terminalKill(n.id).catch(() => {
-          // Best effort. The board is being replaced either way, and a node that would not die
-          // cleanly is not a reason to leave the user looking at a canvas they just replaced.
-        });
-      }
-      const loaded = imported.nodes.map(toFlow);
-      nodesRef.current = loaded;
-      edgesRef.current = imported.edges;
-      titleRef.current = imported.title;
-      const restored = imported.nodes.some((n) => n.id === imported.seat)
-        ? imported.seat
-        : null;
-      seatRef.current = restored;
-      setSeat(restored);
-      // An imported board may reference an image that is not in this machine's library. It draws
-      // as the plain background rather than erroring, which is the same fallback a removed
-      // library file gets.
-      wallpaperRef.current = imported.wallpaper;
-      setWallpaper(imported.wallpaper);
-      setNodes(loaded);
-      setEdges(imported.edges);
-      viewport.current = imported.viewport;
-      // The engine already wrote it to disk as part of importing, so the window is in step with
-      // the file rather than one debounce behind it.
-      unsaved.current = false;
-      setSaveError(null);
-    } catch (e) {
-      setSaveError(`That canvas was not imported: ${String(e)}`);
-    }
-  }, []);
-
-  // Close a node to agents, or open it again. The user's own hands are never restricted by this:
-  // they can still wire a locked node themselves, because it is their canvas and the lock is about
-  // what happens while they are not watching.
-  const toggleLock = useCallback(
-    (nodeId: string) => {
-      setNodes((cur) => {
-        const next = cur.map((n) =>
-          n.id === nodeId
-            ? { ...n, data: { ...n.data, locked: n.data.locked !== true } }
-            : n,
-        );
-        nodesRef.current = next;
-        scheduleSave();
-        return next;
-      });
-    },
-    [scheduleSave],
-  );
-
-  // Picking a wallpaper applies immediately and rides the debounced save, exactly like moving a
-  // node: the choice is one field on the canvas, not its own persistence path.
-  const pickWallpaper = useCallback(
-    (w: Wallpaper) => {
-      wallpaperRef.current = w;
-      setWallpaper(w);
-      scheduleSave();
-    },
-    [scheduleSave],
-  );
-
-  // Moving the seat is one write. Nothing is spawned or killed here: the seat is a role, so taking
-  // it from a node leaves that node running exactly as it was, just no longer the one the command
-  // bar talks to.
-  const assignSeat = useCallback(
-    (nodeId: string | null) => {
-      seatRef.current = nodeId;
-      setSeat(nodeId);
-      scheduleSave();
-    },
-    [scheduleSave],
-  );
-
-  // Closing inside the debounce window drops whatever was moved last, and dragging a node and then
-  // quitting is a completely ordinary thing to do. I hold the close, flush, then let it go.
-  //
-  // The question is "is there work not on disk", which is why it asks `unsaved` and not the timer:
-  // clearTimeout does not reset the handle, so a timer ref is only ever undefined before the very
-  // first save and would answer "yes, pending" forever after. If the flush fails the error is
-  // already on screen, and I still close, because refusing to quit over a failed save traps someone
-  // in an app they are trying to leave.
-  // One close request owns the exit. A user who clicks close twice while the flush runs must
-  // not start a second save or, worse, race two destroys; and whatever the save does, the window
-  // has to actually go, because an app that refuses to close is holding its user hostage over a
-  // write they cannot see. A tester on macOS hit exactly that wedge.
   // What to say when the window refuses to go. Shares the save banner because it is the same kind
   // of message — something the app cannot fix, that the user is the only one who can act on, and
   // that must stay on screen rather than being mentioned once.
@@ -511,6 +319,13 @@ export default function App() {
     );
   }, []);
 
+  // Closing inside the debounce window drops whatever changed last, and making a change and then
+  // quitting is a completely ordinary thing to do. I hold the close, flush, then let it go.
+  //
+  // One close request owns the exit. A user who clicks close twice while the flush runs must not
+  // start a second save or, worse, race two destroys; and whatever the save does, the window has to
+  // actually go, because an app that refuses to close is holding its user hostage over a write they
+  // cannot see. A tester on macOS hit exactly that wedge.
   const closing = useRef(false);
   useEffect(() => {
     const win = getCurrentWindow();
@@ -518,8 +333,7 @@ export default function App() {
       // Asked twice. The first request is still flushing, and the honest reading of a second click
       // is "I want out now", so it goes now. This used to preventDefault and return, which was fine
       // exactly as long as the first request always reached its destroy. When it did not, the flag
-      // stayed latched and every close from then on was refused: the window could not be shut at
-      // all and the only way out was killing the process.
+      // stayed latched and every close from then on was refused.
       if (closing.current) {
         void win.destroy().catch(reportStuck);
         return;
@@ -529,15 +343,11 @@ export default function App() {
       closing.current = true;
       // Bounded, and that bound is the point. `canvas_save` crosses IPC into the engine, and an
       // engine that is wedged must not take the window with it: flushing on close exists to save
-      // the user's layout, not to make quitting conditional on a write succeeding. Whatever
-      // happens in the next couple of seconds, the window goes.
+      // the user's work, not to make quitting conditional on a write succeeding.
       await Promise.race([
         saveNow().catch(() => {}),
         new Promise((resolve) => setTimeout(resolve, CLOSE_FLUSH_MAX_MS)),
       ]);
-      // Same story as the button: a destroy that is refused used to vanish, and this is the path a
-      // title bar cross and alt+F4 both come down. The window stayed open, the flag stayed latched,
-      // and nothing anywhere said a permission had been denied.
       void win.destroy().catch(reportStuck);
     });
     return () => {
@@ -550,8 +360,7 @@ export default function App() {
   // The `.catch` is the whole reason this bug survived several rounds of being fixed. Window close
   // and destroy are permissioned in Tauri, `core:window:default` grants neither, and every call
   // site here was `void win.close()` with nothing watching. So the rejection went nowhere: the
-  // button did nothing, alt+F4 did nothing, and there was no error anywhere to say why. A silent
-  // failure on the one control that has to work is worse than a loud one, and this is now loud.
+  // button did nothing, alt+F4 did nothing, and there was no error anywhere to say why.
   const closeIdentra = useCallback(async () => {
     try {
       await getCurrentWindow().close();
@@ -560,192 +369,277 @@ export default function App() {
     }
   }, [reportStuck]);
 
-  // Ctrl+Q / Cmd+Q, because that is the key people press to leave an app and Identra was not
-  // listening for it.
+  // Nodes are a list now, so every change to one is a list operation and they all save the same way.
+  const putNodes = useCallback(
+    (next: CanvasNode[]) => {
+      nodesRef.current = next;
+      setNodes(next);
+      scheduleSave();
+    },
+    [scheduleSave],
+  );
+
+  const putEdges = useCallback(
+    (next: Edge[]) => {
+      edgesRef.current = next;
+      setEdges(next);
+      scheduleSave();
+    },
+    [scheduleSave],
+  );
+
+  // Returns the new node's id, because an agent that asked for this needs to be able to name it.
+  // The new node also takes the focused pane, which is what makes opening an agent feel like opening
+  // a thing rather than adding a row to a list you then have to click.
+  const addNode = useCallback(
+    (kind: string, title: string, cwd: string | null = null) => {
+      const id = crypto.randomUUID();
+      putNodes([
+        ...nodesRef.current,
+        {
+          id,
+          kind,
+          x: 0,
+          y: 0,
+          width: DEFAULT_W,
+          height: DEFAULT_H,
+          title,
+          cwd,
+          locked: false,
+        },
+      ]);
+      setTree((cur) => setNode(cur, focusLeafRef.current, id));
+      return id;
+    },
+    [putNodes],
+  );
+
+  // Close a node for good: the process, the conversation, the tab, and any pane showing it. This is
+  // the gesture the canvas spelled as deleting a box, and it is the only one that ends an agent.
+  const closeNode = useCallback(
+    (id: string) => {
+      const node = nodesRef.current.find((n) => n.id === id);
+      const name = node?.title || node?.kind || "this";
+      const cost =
+        node?.kind === "dev"
+          ? "The dev server stops."
+          : "The agent stops and its conversation is forgotten.";
+      if (!window.confirm(`Close ${name}?\n\n${cost}`)) return;
+      void terminalKill(id).catch((err) => {
+        // A node that never launched has no terminal to kill and the engine says so. That is not a
+        // failure worth showing anyone, but it must not become an unhandled rejection either.
+        console.warn(`could not close node ${id} cleanly`, err);
+      });
+      putNodes(nodesRef.current.filter((n) => n.id !== id));
+      // An edge whose end is gone is not a permission any more, it is a dangling id. The bus reads
+      // this slice per call, so leaving it would be a grant pointing at nothing.
+      putEdges(
+        edgesRef.current.filter((e) => e.source !== id && e.target !== id),
+      );
+      setTree((cur) => clearNode(cur, id));
+    },
+    [putNodes, putEdges],
+  );
+
+  const setNodeCwd = useCallback(
+    (id: string, cwd: string) => {
+      putNodes(nodesRef.current.map((n) => (n.id === id ? { ...n, cwd } : n)));
+    },
+    [putNodes],
+  );
+
+  // Connect two nodes, recording who asked. `by` is not bookkeeping: an agent can call
+  // `connect_nodes` and grant itself access to another agent's context, and the connections panel is
+  // now the only place that shows up. A grant with no attribution is one the user cannot audit.
+  const wire = useCallback(
+    (from: string, to: string, by: Grantor) => {
+      // Same pair twice is the same permission, and a second edge would mean revoking took two
+      // clicks to do one thing. The first grant keeps its attribution: an agent re-asking for a
+      // connection you already made does not make it the agent's.
+      if (edgesRef.current.some((e) => e.source === from && e.target === to)) {
+        return;
+      }
+      putEdges([
+        ...edgesRef.current,
+        { id: `${from}->${to}`, source: from, target: to, by },
+      ]);
+    },
+    [putEdges],
+  );
+
+  // Take a connection back. `get_peer_context` reads this slice on every call, so a revoke takes
+  // effect on the next read rather than at the next launch — unlike granting one, which a CLI only
+  // picks up when it next starts. The asymmetry is the right way round: a permission should be
+  // slower to give than to take away.
+  const revoke = useCallback(
+    (edgeId: string) => {
+      putEdges(edgesRef.current.filter((e) => e.id !== edgeId));
+    },
+    [putEdges],
+  );
+
+  // Take the workspace out to a file, or bring one in.
   //
-  // Every exit this app had came from the window manager: a cross on a title bar, or alt+F4 handled
-  // by the desktop. Neither is something an app can count on. A desktop that draws no decorations,
-  // a window that never gets the keystroke because a terminal inside it swallowed it first, and the
-  // only way out left is a process list — which is where this actually ended up.
+  // Export sends what is on screen rather than what is on disk, so a change made in the last few
+  // hundred milliseconds is in the file too. Both report through the save banner, which is already
+  // the place this window says a workspace operation failed.
+  const exportCanvas = useCallback(async () => {
+    try {
+      await canvasExport(snapshot());
+    } catch (e) {
+      setSaveError(`That workspace was not exported: ${String(e)}`);
+    }
+  }, [snapshot]);
+
+  const importCanvas = useCallback(async () => {
+    // Asked before the dialog opens, not after a file is chosen. Confirming a destructive action
+    // and then being asked to pick the file is the wrong order: by then it reads as already decided.
+    if (
+      nodesRef.current.length > 0 &&
+      !window.confirm(
+        "Import a workspace?\n\nThis replaces everything open here. The agents running here stop, and their conversations are forgotten.",
+      )
+    ) {
+      return;
+    }
+    try {
+      const imported = await canvasImport();
+      if (imported === null) return; // cancelled, nothing to say
+      // Stop what is running before the nodes go. These are the nodes being replaced, so the same
+      // teardown a close does has to happen here or their PTYs outlive the work they belonged to.
+      for (const n of nodesRef.current) {
+        void terminalKill(n.id).catch(() => {
+          // Best effort. Everything is being replaced either way.
+        });
+      }
+      nodesRef.current = imported.nodes;
+      edgesRef.current = imported.edges;
+      setEdges(imported.edges);
+      titleRef.current = imported.title;
+      viewportRef.current = imported.viewport;
+      seatRef.current = null;
+      setSeat(null);
+      setSeatAgent(null);
+      // An imported workspace may reference an image that is not in this machine's library. It
+      // draws as the plain background rather than erroring, the same fallback a removed library
+      // file gets.
+      wallpaperRef.current = imported.wallpaper;
+      setWallpaper(imported.wallpaper);
+      setNodes(imported.nodes);
+      setTree(leaf("pane-0", imported.nodes[0]?.id ?? null));
+      setFocusLeaf("pane-0");
+      // The engine already wrote it to disk as part of importing, so the window is in step with the
+      // file rather than one debounce behind it.
+      unsaved.current = false;
+      setSaveError(null);
+    } catch (e) {
+      setSaveError(`That workspace was not imported: ${String(e)}`);
+    }
+  }, []);
+
+  // Picking a wallpaper applies immediately and rides the debounced save: the choice is one field
+  // on the workspace, not its own persistence path.
+  const pickWallpaper = useCallback(
+    (w: Wallpaper) => {
+      wallpaperRef.current = w;
+      setWallpaper(w);
+      scheduleSave();
+    },
+    [scheduleSave],
+  );
+
+  // Moving the seat is one write. Nothing is spawned or killed here: the seat is a role.
+  const assignSeat = useCallback(
+    (nodeId: string | null) => {
+      seatRef.current = nodeId;
+      setSeat(nodeId);
+      scheduleSave();
+    },
+    [scheduleSave],
+  );
+
+  // ── the keyboard ────────────────────────────────────────────────────────────
   //
-  // Capturing on window, same as the command bar's shortcut and for the same reason: every node on
-  // this canvas is a terminal that takes keys first, and a quit shortcut that only works when
-  // nothing has focus is not a quit shortcut. It raises the ordinary close request, so the flush
-  // and the agent teardown are the same ones the button and the title bar go through.
+  // Every pane in this shell is a terminal that takes keys first, so these are captured on the
+  // window the same way the quit shortcut is. A shortcut that only works when nothing has focus is
+  // not a shortcut here: there is almost always a terminal with focus.
+  //
+  // This is the whole v0.2.0 set, and it is deliberately small: switch tab, walk the panes, split,
+  // close a pane, reach the right column, quit. A command palette and drag-to-reorder are additions
+  // to a shell that exists, and neither is cheaper to decide now.
+  const showInFocused = useCallback((nodeId: string) => {
+    setTree((cur) => setNode(cur, focusLeafRef.current, nodeId));
+  }, []);
+
+  const splitFocused = useCallback(() => {
+    const id = `pane-${crypto.randomUUID()}`;
+    setTree((cur) => splitLeaf(cur, focusLeafRef.current, id, "row"));
+    setFocusLeaf(id);
+  }, []);
+
+  const closeFocusedPane = useCallback(() => {
+    const going = focusLeafRef.current;
+    const rest = leaves(treeRef.current).filter((l) => l.id !== going);
+    if (rest.length === 0) return; // the last pane stays; there would be nowhere to go
+    setTree((cur) => closeLeaf(cur, going));
+    setFocusLeaf(rest[0]!.id);
+  }, []);
+
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
-      if (e.key !== "q" && e.key !== "Q") return;
       if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
-      e.preventDefault();
-      e.stopPropagation();
-      void closeIdentra();
+      const take = () => {
+        e.preventDefault();
+        e.stopPropagation();
+      };
+      if (e.key === "q" || e.key === "Q") {
+        // Ctrl+Q / Cmd+Q, because that is the key people press to leave an app. It raises the
+        // ordinary close request, so the flush is the same one the title bar goes through.
+        take();
+        void closeIdentra();
+        return;
+      }
+      if (e.key >= "1" && e.key <= "9") {
+        const at = Number(e.key) - 1;
+        const node = nodesRef.current[at];
+        if (node === undefined) return;
+        take();
+        showInFocused(node.id);
+        return;
+      }
+      if (e.key === "]" || e.key === "[") {
+        take();
+        setFocusLeaf((cur) =>
+          stepLeaf(treeRef.current, cur, e.key === "]" ? 1 : -1),
+        );
+        return;
+      }
+      if (e.key === "\\") {
+        take();
+        if (e.shiftKey) closeFocusedPane();
+        else splitFocused();
+        return;
+      }
+      if (e.key === "e" || e.key === "E") {
+        take();
+        setRight((cur) => (cur === null ? "files" : null));
+      }
     };
     window.addEventListener("keydown", key, true);
     return () => window.removeEventListener("keydown", key, true);
-  }, [closeIdentra]);
+  }, [closeIdentra, showInFocused, splitFocused, closeFocusedPane]);
 
-  const onNodesChange = useCallback(
-    (changes: NodeChange<FNode>[]) => {
-      setNodes((cur) => {
-        const next = applyNodeChanges(changes, cur);
-        nodesRef.current = next;
-        scheduleSave();
-        return next;
-      });
-    },
-    [scheduleSave],
-  );
-
-  const onEdgesChange = useCallback(
-    (changes: EdgeChange<FEdge>[]) => {
-      setEdges((cur) => {
-        const next = applyEdgeChanges(changes, cur);
-        edgesRef.current = next;
-        scheduleSave();
-        return next;
-      });
-    },
-    [scheduleSave],
-  );
-
-  // Drawing a wire onto an agent that is already running does nothing, and used to do nothing
-  // silently.
-  //
-  // An edge is the permission to share context, and it is read once: a CLI loads its MCP servers at
-  // startup, so a wire drawn afterwards is real on the canvas, saved to the canvas, and completely
-  // inert until that node next starts. The README has said "draw the wire, then launch" since the
-  // feature shipped. The app never said it, so the honest reading of the user's experience is that
-  // they wired two agents, watched nothing happen, and concluded the bus was broken.
-  //
-  // The wire says it itself rather than a message saying it. This codebase has no toast surface and
-  // says so twice in its own stylesheet, and it is right: a line that appears and goes is the wrong
-  // shape for a fact that stays true until you relaunch. A dashed edge that reads "connects at next
-  // launch" is the state, drawn where the user is already looking, for exactly as long as it holds.
-  //
-  // The mark is deliberately not persisted. `snapshot` writes edges as id, source and target only,
-  // so reopening the workspace drops it — which is correct, because reopening relaunches the agents
-  // and the wire genuinely does take effect. The one gap is relaunching a single node mid-session:
-  // the mark goes stale until the next reload. Closing that would mean this component tracking every
-  // node's launches, and a slightly stale hint is a far smaller cost than no hint at all, which is
-  // what shipped.
-  const onConnect = useCallback(
-    (c: Connection) => {
-      // The status probe first, so the edge is drawn already marked rather than flickering from
-      // plain to dashed. It is one local IPC call, and a null status means a node that has never
-      // started, which is the case where the wire works normally.
-      void (async () => {
-        let inert = false;
-        try {
-          const ends = [c.source, c.target].filter((id): id is string => id !== null);
-          const statuses = await Promise.all(
-            ends.map((id) => terminalStatus(id).catch(() => null)),
-          );
-          inert = statuses.some((s) => s !== null);
-        } catch {
-          // A probe that will not answer must not cost the user their wire. Draw it plain: the
-          // worst case is the old behaviour, and the wire itself is still saved either way.
-          inert = false;
-        }
-        setEdges((cur) => {
-          const next = addEdge(
-            inert
-              ? {
-                  ...c,
-                  label: "connects at next launch",
-                  style: { strokeDasharray: "6 4" },
-                  className: "identra-edge--inert",
-                }
-              : c,
-            cur,
-          );
-          edgesRef.current = next;
-          scheduleSave();
-          return next;
-        });
-      })();
-    },
-    [scheduleSave],
-  );
-
-  // React Flow has already taken the node off the canvas by the time this runs, so this is where
-  // the engine side goes: the PTY, the resumed conversation, and the node's bus credential. A node
-  // that never launched has no terminal to kill and the engine says so; that is not a failure worth
-  // showing anyone, but it must not become an unhandled rejection either.
-  const onNodesDelete = useCallback((deleted: FNode[]) => {
-    for (const n of deleted) {
-      void terminalKill(n.id).catch((err) => {
-        console.warn(`could not close node ${n.id} cleanly`, err);
-      });
-    }
-    // No seat to vacate here. The orchestrator is headless, so deleting a node can never be the
-    // thing that takes the command center's agent away; it goes when its process does, which the
-    // liveness check at dispatch notices on its own.
-    // A focus view over a node that just went is a window onto nothing; back to the canvas.
-    setFocused((cur) =>
-      cur !== null && deleted.some((n) => n.id === cur) ? null : cur,
-    );
-  }, []);
-
-  // Returns the new node's id, because an agent that asked for this needs to be able to name it.
-  const addNode = useCallback(
-    (
-      kind: string,
-      title: string,
-      cwd: string | null = null,
-      at?: { x: number; y: number },
-    ) => {
-      const vp = viewport.current;
-      // Drop the node near the middle of what's currently on screen.
-      const spot = at ?? {
-        x: (-vp.x + window.innerWidth / 2 - DEFAULT_W / 2) / vp.zoom,
-        y: (-vp.y + window.innerHeight / 2 - DEFAULT_H / 2) / vp.zoom,
-      };
-      const id = crypto.randomUUID();
-      setNodes((cur) => {
-        const next = [
-          ...cur,
-          toFlow({
-            id,
-            kind,
-            x: spot.x,
-            y: spot.y,
-            width: DEFAULT_W,
-            height: DEFAULT_H,
-            title,
-            cwd,
-            locked: false,
-          }),
-        ];
-        nodesRef.current = next;
-        scheduleSave();
-        return next;
-      });
-      return id;
-    },
-    [scheduleSave],
-  );
-
-  // The command center. One instruction goes to one node, and that node already holds every bus
-  // tool it needs to break the work up and hand it out, so this adds no new mechanism: it is the
-  // canvas typing into a terminal on the user's behalf.
+  // ── the command center ──────────────────────────────────────────────────────
   const [dispatch, setDispatch] = useState<DispatchState>({ kind: "idle" });
-  // No transcript state here any more. The pane attaches to the seat's PTY itself and replays it
-  // from the engine's ring buffer, so what the orchestrator said while the user was looking
-  // somewhere else is on screen because the engine kept it, not because this component was
-  // accumulating a copy in memory.
   // The seat is briefed once per session, in front of the first instruction it receives. Kept in a
   // ref rather than state because nothing renders from it and it must not be stale inside the async
   // dispatch below.
   const seatBriefed = useRef(false);
 
-  // The poll that used to live here waited for AgentNode to mount, measure a terminal and start the
-  // CLI, because the seat was a node and that was the only way its PTY came into being. A headless
-  // seat starts its own PTY and `terminal_start` has spawned the process by the time it returns, so
-  // there is nothing left to wait for.
   const sendToSeat = useCallback(
     async (instruction: string) => {
-      // Liveness, not canvas membership: the seat is headless and never appears as a node, so the
-      // only question that means anything is whether its process is still there.
+      // Liveness, not membership: the seat is headless and never appears as a tab, so the only
+      // question that means anything is whether its process is still there.
       const current = seatRef.current;
       const alive =
         current === null
@@ -780,14 +674,9 @@ export default function App() {
           note: `Starting ${agent?.name ?? plan.agentId} as the orchestrator`,
         });
         // The orchestrator is headless on purpose. It runs a real CLI, because that is the only
-        // thing that can actually do the work, but it never becomes a node: putting it on the
-        // canvas made the command center a remote control for a terminal the user then had to go
-        // and read. The conversation belongs in the bar they typed into.
-        //
-        // Starting the PTY here rather than letting a node component do it is what makes that
-        // possible, and it also removes the wait that used to be needed: `terminal_start` has
-        // spawned the process by the time it returns, so there is no window where the seat exists
-        // on the canvas but has nothing behind it.
+        // thing that can actually do the work, but it never becomes a tab: making it one turned the
+        // command center into a remote control for a terminal the user then had to go and read. The
+        // conversation belongs in the bar they typed into.
         const spec = (await agentsByKind()).get(plan.agentId);
         if (!spec || !spec.available) {
           setDispatch({
@@ -814,10 +703,8 @@ export default function App() {
           });
           return;
         }
-        // A new orchestrator is a new conversation, and the pane is keyed on this id, so assigning
-        // it is also what tears the last one's terminal down and mounts a fresh one. Leaving the
-        // previous seat's screen above the new one would read as a session that had suddenly
-        // forgotten itself.
+        // A new orchestrator is a new conversation, and the bar's pane is keyed on this id, so
+        // assigning it is also what tears the last one's terminal down and mounts a fresh one.
         assignSeat(nodeId);
         setSeatAgent(spec.name);
         fresh = true;
@@ -844,8 +731,6 @@ export default function App() {
           note: "Sent. Its reply appears here as it works.",
         });
       } catch (e) {
-        // The seat node was closed, or its agent has exited. Either way the instruction did not
-        // land, and the user is the only one who can do anything about it.
         setDispatch({
           kind: "failed",
           error: `That did not reach the orchestrator: ${String(e)}`,
@@ -858,13 +743,11 @@ export default function App() {
   // What the seat is doing, shown next to the bar so the user does not have to read a scrolling
   // terminal to know whether anything came of what they typed.
   const [plan, setPlan] = useState<string | null>(null);
-
   const [seatAsking, setSeatAsking] = useState(false);
 
   // Polled rather than pushed, and only while a seat exists. The board is written by agents through
   // the bus and the seat's status is read from output timing, so neither has an event to subscribe
-  // to. Two cheap reads every few seconds is the honest cost of showing this at all, and it stops
-  // entirely when there is no seat.
+  // to. Two cheap reads every few seconds is the honest cost of showing this at all.
   useEffect(() => {
     if (seat === null) {
       setPlan(null);
@@ -874,8 +757,7 @@ export default function App() {
     let dropped = false;
     const poll = async () => {
       // Both are best effort. The board can be mid-write and the seat can be closed between the
-      // check and the call, and neither is worth a visible error: the strip just keeps its last
-      // reading until the next tick.
+      // check and the call, and neither is worth a visible error.
       const tasks = await boardList().catch(() => null);
       const status = await terminalStatus(seat).catch(() => null);
       if (dropped) return;
@@ -890,7 +772,7 @@ export default function App() {
     };
   }, [seat]);
 
-  // The first fact a workspace ever learns opens the panel once, on the memory tab, so the moment
+  // The first fact a workspace ever learns opens the right column once, on memory, so the moment
   // the promise becomes true is seen and not buried under the terminals. memory_reveal_once returns
   // true on exactly one call per workspace, ever, so this cannot re-fire on a later fact or a later
   // session; the ref only keeps it from asking the engine on every poll tick this session.
@@ -906,11 +788,7 @@ export default function App() {
       if (list.length > 0 && !revealAsked.current) {
         revealAsked.current = true;
         const first = await memoryRevealOnce().catch(() => false);
-        if (first && !dropped) {
-          setFilesOpen(false);
-          setPanelTab("memory");
-          setPanelOpen(true);
-        }
+        if (first && !dropped) setRight("work");
       }
     };
     void tick();
@@ -921,95 +799,64 @@ export default function App() {
     };
   }, [workspace]);
 
-  const wire = useCallback(
-    (from: string, to: string) => {
-      setEdges((cur) => {
-        const next = addEdge(
-          { source: from, target: to, sourceHandle: null, targetHandle: null },
-          cur,
-        );
-        edgesRef.current = next;
-        scheduleSave();
-        return next;
-      });
-    },
-    [scheduleSave],
-  );
-
-  // Dropping a file from the OS onto the canvas opens it in a viewer node at the drop point.
-  // This is the user's own door to the viewer; the engine still refuses anything outside the
-  // workspace, and the node shows that refusal rather than this handler pre-judging it.
+  // Dropping a file from the OS onto the shell opens it as a tab. This is the user's own door to
+  // the viewer; the engine still refuses anything outside the workspace, and the pane shows that
+  // refusal rather than this handler pre-judging it.
   const workspaceOpenRef = useRef(false);
   workspaceOpenRef.current = workspace !== null;
   useEffect(() => {
     const un = getCurrentWebview().onDragDropEvent((event) => {
-      // Before a workspace is open there is no canvas to put a node on, and no folder for the
-      // containment rule to mean anything against.
+      // Before a workspace is open there is nowhere to put a tab, and no folder for the containment
+      // rule to mean anything against.
       if (event.payload.type !== "drop" || !workspaceOpenRef.current) return;
-      const { paths, position } = event.payload;
-      // Physical pixels from the webview, logical in the browser, flow coords on the board.
-      const dpr = window.devicePixelRatio || 1;
-      const vp = viewport.current;
-      paths.forEach((path, i) => {
-        const name = path.split("/").pop() ?? path;
-        addNode("file", name, path, {
-          x: (position.x / dpr - vp.x) / vp.zoom + i * 28,
-          y: (position.y / dpr - vp.y) / vp.zoom + i * 28,
-        });
-      });
+      for (const path of event.payload.paths) {
+        addNode("file", path.split("/").pop() ?? path, path);
+      }
     });
     return () => {
       void un.then((f) => f());
     };
   }, [addNode]);
 
-  // The click on a dev node's address badge. A browser node opens beside the server, wired to it
-  // so the pair reads as one thing. Clicking again stacks nothing: if a browser node is already
-  // showing that address, there is nothing left to offer.
+  // A dev server announcing its address. A browser tab opens on it, wired to the server so the pair
+  // reads as one thing. Asking twice stacks nothing: if a browser tab is already showing that
+  // address, there is nothing left to offer.
   const openPreview = useCallback(
     (devId: string, url: string) => {
-      const already = nodesRef.current.some(
-        (n) => n.data.kind === "browser" && n.data.cwd === url,
-      );
-      if (already) return;
-      const dev = nodesRef.current.find((n) => n.id === devId);
-      const at = dev
-        ? {
-            x: dev.position.x + (Number(dev.style?.width) || DEFAULT_W) + 60,
-            y: dev.position.y,
-          }
-        : undefined;
-      const browserId = addNode("browser", "Preview", url, at);
-      if (dev) wire(devId, browserId);
+      if (nodesRef.current.some((n) => n.kind === "browser" && n.cwd === url)) {
+        return;
+      }
+      // The user clicked the address badge, so this connection is theirs.
+      const browserId = addNode("browser", "Preview", url);
+      wire(devId, browserId, "you");
     },
     [addNode, wire],
   );
 
-  // An agent asking the canvas to change. The canvas is the single writer of its own state, so the
+  // An agent asking the shell to change. The window is the single writer of its own state, so the
   // engine sends the request here rather than editing canvas.json underneath us, and we answer.
   // Every branch must reply exactly once: an agent is blocked on this until it hears back.
   //
   // This is also the one place a node's lock is enforced, and it is the right place: it is the only
-  // door an agent has onto the canvas. The user's own drags go through onConnect and are never
-  // checked, which is the intended asymmetry.
+  // door an agent has. The user's own grants never come through here, which is the intended
+  // asymmetry.
   const applyCanvasCommand = useCallback(
     (cmd: CanvasCommand): CanvasResult => {
       const p = cmd.params;
       const locked = (id?: string) =>
-        nodesRef.current.some((n) => n.id === id && n.data.locked === true);
+        nodesRef.current.some((n) => n.id === id && n.locked);
       // Named, so the agent can tell the user which node it was and they can decide, rather than
       // just reporting that something was refused.
       const lockedReason = (id: string) => {
-        const name =
-          nodesRef.current.find((n) => n.id === id)?.data.title ?? id;
-        return `${name} is locked, so it cannot be wired to by an agent. The person at the keyboard can unlock it or wire it themselves.`;
+        const name = nodesRef.current.find((n) => n.id === id)?.title ?? id;
+        return `${name} is locked, so an agent cannot connect to it. The person at the keyboard can unlock it or connect it themselves.`;
       };
       switch (cmd.action) {
         case "add_terminal": {
           const kind = typeof p.kind === "string" ? p.kind : "codex";
           const known = agentsRef.current.find((a) => a.id === kind);
-          // Refuse rather than drop a node that can never run. The agent gets a reason it can act
-          // on, which is better than a broken node appearing on the user's canvas.
+          // Refuse rather than open a tab that can never run. The agent gets a reason it can act
+          // on, which is better than a broken tab appearing in the user's shell.
           if (!known)
             return {
               ok: false,
@@ -1021,13 +868,8 @@ export default function App() {
               error: `${known.name} is not installed on this machine`,
             };
           }
-          // Place a spawned node below its parent so a fan-out reads as a tree, not a pile.
-          const parent = nodesRef.current.find((n) => n.id === p.connectTo);
-          const at = parent
-            ? { x: parent.position.x, y: parent.position.y + DEFAULT_H + 60 }
-            : undefined;
-          // Refuse before spawning, not after. Creating the node and then failing to wire it would
-          // leave a stray agent running on the user's canvas that nobody asked for and nobody owns.
+          // Refuse before spawning, not after. Opening the tab and then failing to connect it would
+          // leave a stray agent running that nobody asked for and nobody owns.
           if (
             typeof p.connectTo === "string" &&
             p.connectTo &&
@@ -1037,9 +879,9 @@ export default function App() {
           }
           const title =
             typeof p.title === "string" && p.title ? p.title : known.name;
-          const id = addNode(kind, title, null, at);
+          const id = addNode(kind, title);
           if (typeof p.connectTo === "string" && p.connectTo)
-            wire(p.connectTo, id);
+            wire(p.connectTo, id, "agent");
           return { ok: true, id };
         }
         case "connect_nodes": {
@@ -1047,26 +889,23 @@ export default function App() {
           const has = (id?: string) =>
             nodesRef.current.some((n) => n.id === id);
           // Checking for undefined here as well as membership is what narrows both to a string for
-          // the rest of the branch, so the wire call below needs no cast to say what it already
-          // knows.
+          // the rest of the branch.
           if (
             from === undefined ||
             to === undefined ||
             !has(from) ||
             !has(to)
           ) {
-            return {
-              ok: false,
-              error: "one of those nodes is not on the canvas",
-            };
+            return { ok: false, error: "one of those is not open here" };
           }
           if (from === to)
-            return { ok: false, error: "a node cannot be wired to itself" };
+            return { ok: false, error: "a node cannot be connected to itself" };
           // Either end being locked is enough to refuse. An edge is the bus authorization and it
-          // reads both ways, so wiring out of a locked node exposes it exactly as much as wiring in.
+          // reads both ways, so connecting out of a locked node exposes it exactly as much as
+          // connecting in.
           if (locked(from)) return { ok: false, error: lockedReason(from) };
           if (locked(to)) return { ok: false, error: lockedReason(to) };
-          wire(from, to);
+          wire(from, to, "agent");
           return { ok: true, id: `${from}->${to}` };
         }
         case "add_note": {
@@ -1077,12 +916,12 @@ export default function App() {
         }
         case "show_file": {
           const path = typeof p.path === "string" ? p.path : "";
-          if (!path) return { ok: false, error: "a file node needs a path" };
+          if (!path) return { ok: false, error: "a file tab needs a path" };
           const title =
             typeof p.title === "string" && p.title
               ? p.title
               : (path.split("/").pop() ?? "file");
-          // Same lock rule as every other wire an agent asks for, checked before the node
+          // Same lock rule as every other connection an agent asks for, checked before the tab
           // exists so a refusal leaves nothing behind.
           if (
             typeof p.connectTo === "string" &&
@@ -1091,27 +930,15 @@ export default function App() {
           ) {
             return { ok: false, error: lockedReason(p.connectTo) };
           }
-          // Artifacts fan right of the agent that made them; helpers fan down. The two reading
-          // directions are what keep a busy board legible.
-          const parent = nodesRef.current.find((n) => n.id === p.connectTo);
-          const at = parent
-            ? {
-                x:
-                  parent.position.x +
-                  (Number(parent.style?.width) || DEFAULT_W) +
-                  60,
-                y: parent.position.y,
-              }
-            : undefined;
-          const id = addNode("file", title, path, at);
+          const id = addNode("file", title, path);
           if (typeof p.connectTo === "string" && p.connectTo)
-            wire(p.connectTo, id);
+            wire(p.connectTo, id, "agent");
           return { ok: true, id };
         }
         default:
           return {
             ok: false,
-            error: `the canvas does not know how to ${cmd.action}`,
+            error: `Identra does not know how to ${cmd.action}`,
           };
       }
     },
@@ -1123,13 +950,8 @@ export default function App() {
   // Subscribing on `applyCanvasCommand` looked right and is a trap. Its identity changes whenever
   // anything it closes over does, and the unlisten is a promise, so a re-subscribe is: register the
   // new listener, then await the old one's teardown. A command arriving inside that window is
-  // delivered to both, and both act on it — an agent's `add_terminal` becomes two nodes on the
-  // canvas and its `connect_nodes` wires twice, with no error anywhere to explain it.
-  //
-  // It has not happened yet only because the dependency chain happens to bottom out somewhere
-  // stable today. That is not a property anyone can see from here, and the first innocuous change
-  // that makes `addNode` re-created per render turns it into a duplicating canvas. A ref costs one
-  // line and takes the whole class off the table.
+  // delivered to both, and both act on it — an agent's `add_terminal` becomes two tabs and its
+  // `connect_nodes` connects twice, with no error anywhere to explain it.
   const applyRef = useRef(applyCanvasCommand);
   applyRef.current = applyCanvasCommand;
   useEffect(() => {
@@ -1148,29 +970,8 @@ export default function App() {
     };
   }, []);
 
-  // The seat is canvas state, not node state, so it is stamped onto the nodes at render rather than
-  // stored in them. That keeps one seat id as the only truth, and it keeps `seat` out of what gets
-  // written back to canvas.json as part of a node.
-  const flowNodes = useMemo(
-    () =>
-      nodes.map((n) => {
-        const data = {
-          ...n.data,
-          onToggleLock: toggleLock,
-          onOpenPreview: openPreview,
-          onFocus: setFocused,
-        };
-        // No seat stamping here any more: the orchestrator is headless, so no node on this canvas
-        // is ever the seat. Every node here is work the user placed themselves.
-        return { ...n, data };
-      }),
-    [nodes, toggleLock, openPreview],
-  );
-
-  // Held in state rather than read off a node, because the seat no longer is one. It lives for the
-  // session only, which is all it needs to: terminals die with the process, so a seat id restored
-  // from a saved canvas has nothing running behind it and the next instruction stands a fresh one
-  // up anyway.
+  // Held in state rather than read off a node, because the seat is not one. It lives for the
+  // session only, which is all it needs to.
   const seatName = seat === null ? null : seatAgent;
 
   if (!workspace) {
@@ -1182,63 +983,328 @@ export default function App() {
     );
   }
 
+  const paneCount = leaves(tree).length;
+
   return (
-    <div className="identra-root">
-      {/* The wallpaper is a layer behind the flow, not the flow's own background, so the grid
-          dots and the nodes always sit above it. data-scrim pulls a user image toward the app
-          background; the built-ins and swatches are curated dark values and need no help. */}
+    <div className="identra-root identra-shell">
+      {/* Behind the columns rather than under nodes: it shows at the edges and through the gaps,
+          which is as much of a wallpaper as a shell has room for. data-scrim pulls a user image
+          toward the app background; the built-ins and swatches are curated dark values. */}
       <div
         className="identra-wallpaper"
         data-scrim={needsScrim(wallpaper) || undefined}
         style={{ background: backgroundCss(wallpaper, convertFileSrc) }}
       />
-      <ReactFlow<FNode>
-        nodes={flowNodes}
-        edges={edges}
-        nodeTypes={nodeTypes}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
-        onConnect={onConnect}
-        onNodesDelete={onNodesDelete}
-        onPaneContextMenu={(e) => {
-          // Right-clicking the empty canvas is where you change what the empty canvas looks
-          // like. The browser menu would cover ours, so it goes.
+
+      <aside
+        className="identra-side"
+        onContextMenu={(e) => {
+          // The wallpaper had no home once the canvas went. Here is the one surface in the shell
+          // that is the app rather than someone's content, so it is where right-clicking still
+          // means "change how this looks".
           e.preventDefault();
           setWallMenu({ x: e.clientX, y: e.clientY });
         }}
-        onMoveEnd={(_, vp) => {
-          viewport.current = vp;
-          scheduleSave();
-        }}
-        defaultViewport={viewport.current}
-        nodesConnectable
-        minZoom={0.2}
-        maxZoom={2}
-        // A node here is a running agent with a live conversation, not a shape. The default binds
-        // Backspace and Delete to destroy the selection, which means one keystroke with a node
-        // selected kills an agent mid-task and takes its session with it. Deleting goes through the
-        // node menu, where it can ask first.
-        deleteKeyCode={null}
-        noWheelClassName={wheelToCanvas ? "identra-wheel-never" : "nowheel"}
-        proOptions={{ hideAttribution: true }}
       >
-        {/* The dots flip to white over anything with its own character, because grey dots
-            disappear into a picture. Over the plain board they keep their quiet grey. */}
-        <Background color={dotColor(wallpaper)} gap={24} />
-        <Controls showInteractive={false} />
-        {/* Off by default. On a canvas with three nodes it is a box covering the corner for no
-            gain; it earns its place once the command center has spawned enough helpers that the
-            board runs off screen, which is exactly when the user goes looking for it. */}
-        {minimapOn && (
-          <MiniMap
-            pannable
-            zoomable
-            className="identra-minimap"
-            maskColor="rgba(20, 20, 20, 0.6)"
-            nodeColor="#5e5c64"
+        <div className="identra-side__head">
+          <img className="identra-logo" src={logo} alt="" />
+          <WorkspaceMenu
+            workspace={workspace}
+            onOpen={(w) => void openWorkspace(w)}
+            onRenamed={setWorkspace}
+            onDeleted={() => {
+              // Back to the picker. The workspace under us is gone, so there is nothing to show
+              // and nothing to save into.
+              setWorkspace(null);
+              setNodes([]);
+              setEdges([]);
+              nodesRef.current = [];
+              edgesRef.current = [];
+            }}
+          />
+        </div>
+
+        <div className="identra-side__section">Open an agent</div>
+        <div className="identra-side__agents">
+          {agents.map((a) => {
+            const state = a.available
+              ? a.logged_in
+                ? "ready"
+                : "setup"
+              : "missing";
+            return (
+              <button
+                key={a.id}
+                className="identra-side__agent"
+                data-state={state}
+                disabled={state === "missing"}
+                title={
+                  a.available
+                    ? a.logged_in
+                      ? `${a.name}, signed in`
+                      : `${a.name}, installed but not signed in`
+                    : `${a.name}, not installed`
+                }
+                onClick={() => {
+                  // A signed-in agent just opens. One that is installed but not signed in would
+                  // drop the user into a raw login prompt with no idea why, so I name what is about
+                  // to happen first. The tab still runs the real CLI, which is where the sign-in
+                  // lives, so this is a heads-up and not a second login path to keep in step.
+                  if (
+                    state === "setup" &&
+                    !window.confirm(
+                      `${a.name} is installed but not signed in.\n\nOpening it will start its own sign-in in the tab. Follow the prompts there, then the dot turns green.`,
+                    )
+                  ) {
+                    return;
+                  }
+                  addNode(a.id, a.name);
+                }}
+              >
+                <AgentIcon kind={a.id} className="identra-side__tile" />
+                <span className="identra-side__label">{a.name}</span>
+                <span className="identra-side__dot" data-state={state} />
+              </button>
+            );
+          })}
+          <button
+            className="identra-side__agent"
+            data-state="ready"
+            title="Open a web view"
+            onClick={() =>
+              addNode("browser", "Browser", "http://localhost:1420")
+            }
+          >
+            <AgentIcon kind="browser" className="identra-side__tile" />
+            <span className="identra-side__label">Browser</span>
+          </button>
+          {/* One dev server per workspace: the button is the way to start it, so it goes while one
+              is open. Stopping is closing the tab, like everything else. */}
+          {devCmd !== null && !nodes.some((n) => n.kind === "dev") && (
+            <button
+              className="identra-side__agent"
+              data-state="ready"
+              title={`Start the dev server: ${devCmd.join(" ")}`}
+              onClick={() => addNode("dev", "Dev server")}
+            >
+              <AgentIcon kind="dev" className="identra-side__tile" />
+              <span className="identra-side__label">Dev server</span>
+            </button>
+          )}
+        </div>
+
+        <div className="identra-side__foot">
+          <button
+            className="identra-side__btn"
+            onClick={() => setSettingsOpen((v) => !v)}
+            data-on={settingsOpen}
+          >
+            Settings
+          </button>
+          <button
+            className="identra-side__btn"
+            onClick={() => void exportCanvas()}
+            title="Save this workspace to a file"
+          >
+            Export
+          </button>
+          <button
+            className="identra-side__btn"
+            onClick={() => void importCanvas()}
+            title="Replace this workspace with one from a file"
+          >
+            Import
+          </button>
+          {/* Two different exits, and they were one control until someone pointed out they are not
+              the same act at all. Leaving a workspace is going back to the list of your projects;
+              leaving Identra is ending every agent on the machine. Closing Identra is not offered
+              here: inside a workspace the thing you usually want is the other workspace, and the
+              button that ends every agent should not sit one pixel from the one that lists your
+              projects. ctrl+Q still works from anywhere. */}
+          <button
+            className="identra-side__btn"
+            onClick={() => void goHome()}
+            title="Back to your workspaces. The agents in this one keep running."
+          >
+            Home
+          </button>
+        </div>
+      </aside>
+
+      <main className="identra-centre">
+        {saveError !== null && (
+          // It stays until a save works. Work that is not on disk is not a thing to mention once
+          // and then hide: everything from here is work that will not be there tomorrow, and the
+          // user is the only one who can do anything about a full disk or a read-only folder.
+          <div className="identra-save-error" role="alert">
+            <strong>This workspace is not being saved.</strong> {saveError}
+          </div>
+        )}
+        {canvasNotice && (
+          // Said once, on the first open after the canvas went away. Ten months of arrangement
+          // disappearing into a layout the user did not choose, with nothing saying it was
+          // deliberate, reads as a corrupted file rather than a new version.
+          <div className="identra-notice">
+            <span>
+              Your agents are still here, as tabs. The arrangement is not — that
+              is deliberate. Everything you connected stayed connected.
+            </span>
+            <button onClick={dismissCanvasNotice}>Got it</button>
+          </div>
+        )}
+
+        <div className="identra-tabs" role="tablist">
+          {nodes.map((n, i) => (
+            <Tab
+              key={n.id}
+              node={n}
+              index={i}
+              active={leaves(tree).some((l) => l.nodeId === n.id)}
+              onOpen={() => showInFocused(n.id)}
+              onClose={() => closeNode(n.id)}
+            />
+          ))}
+          {nodes.length > 0 && (
+            <button
+              className="identra-tabs__split"
+              title={`Split the focused pane (${MOD_LABEL.replace("K", "\\")})`}
+              onClick={splitFocused}
+            >
+              Split
+            </button>
+          )}
+        </div>
+
+        <div className="identra-panes">
+          {nodes.length === 0 ? (
+            // A blank shell reads as a broken app. With no agent installed the sidebar is all
+            // disabled, so the usual hint would point at controls you cannot use.
+            noAgentsInstalled(agents) ? (
+              <Onboarding agents={agents} onRecheck={recheckAgents} />
+            ) : (
+              <div className="identra-empty">
+                <p className="identra-empty__lead">This workspace is empty.</p>
+                {/* Two ways in, in the order they are worth trying. Saying what you want is the
+                    whole product and it is one keystroke away, so it leads; the sidebar is the
+                    manual path for when you already know which agent you want. */}
+                <p className="identra-empty__hint">
+                  Say what you want done in the bar below — press{" "}
+                  <kbd className="identra-empty__kbd">{MOD_LABEL}</kbd> from
+                  anywhere — and an orchestrator breaks the work up and opens
+                  the agents it needs.
+                </p>
+                <p className="identra-empty__hint">
+                  Or open one yourself from the left. Open a second, connect
+                  them, and they can split the work between themselves.
+                </p>
+              </div>
+            )
+          ) : (
+            <PaneTreeView
+              pane={tree}
+              nodes={nodes}
+              focusLeaf={focusLeaf}
+              onFocusLeaf={setFocusLeaf}
+              onClosePane={(id) => {
+                const rest = leaves(tree).filter((l) => l.id !== id);
+                if (rest.length === 0) return;
+                setTree((cur) => closeLeaf(cur, id));
+                setFocusLeaf(rest[0]!.id);
+              }}
+              closable={paneCount > 1}
+              onSetCwd={setNodeCwd}
+              onPreviewUrl={openPreview}
+            />
+          )}
+        </div>
+
+        {/* Hidden until an agent exists to run it: on a machine with nothing installed the
+            onboarding panel is the thing to read, and a command bar that can only fail is worse
+            than no command bar. */}
+        {!noAgentsInstalled(agents) && (
+          <CommandBar
+            seatName={seatName}
+            state={dispatch}
+            plan={plan}
+            seatId={seat}
+            awaitingAnswer={seatAsking}
+            // The last word on a dispatch, wherever it went wrong.
+            //
+            // `sending` disables the input, which is right while an instruction is genuinely on its
+            // way and a disaster if it latches: the bar is the only way to talk to the orchestrator,
+            // so a stuck `sending` is an app that has to be restarted to accept another word.
+            // Catching at the one place every path returns through is what makes that impossible.
+            onSubmit={(instruction) =>
+              void sendToSeat(instruction).catch((e: unknown) =>
+                setDispatch({
+                  kind: "failed",
+                  error: `The instruction did not go anywhere: ${String(e)}`,
+                }),
+              )
+            }
           />
         )}
-      </ReactFlow>
+      </main>
+
+      <aside className="identra-right" data-open={right !== null || undefined}>
+        <div className="identra-right__tabs">
+          <button
+            data-on={right === "work"}
+            onClick={() => setRight((cur) => (cur === "work" ? null : "work"))}
+            title="What your agents are working on, and what this project has learned"
+          >
+            Work
+            {/* The ambient signal that memory is accumulating: a count on the toggle, no toast
+                stream. It reads whether or not the column is open. */}
+            {memoryCount > 0 && (
+              <span className="identra-right__badge">{memoryCount}</span>
+            )}
+          </button>
+          <button
+            data-on={right === "files"}
+            onClick={() =>
+              setRight((cur) => (cur === "files" ? null : "files"))
+            }
+            title="Browse and search this workspace's files"
+          >
+            Files
+          </button>
+          <button
+            data-on={right === "connections"}
+            onClick={() =>
+              setRight((cur) => (cur === "connections" ? null : "connections"))
+            }
+            title="Which agents can read each other's work, and who allowed it"
+          >
+            Links
+            {/* Counted whether or not the column is open, for the same reason the memory badge is:
+                an agent can grant itself one of these, and a number that only appears once you go
+                looking is not a number that tells you anything happened. */}
+            {edges.length > 0 && (
+              <span className="identra-right__badge">{edges.length}</span>
+            )}
+          </button>
+        </div>
+        {right === "work" && <WorkPanel onClose={() => setRight(null)} />}
+        {right === "connections" && (
+          <ConnectionsPanel
+            nodes={nodes}
+            edges={edges}
+            onRevoke={revoke}
+            onClose={() => setRight(null)}
+          />
+        )}
+        {right === "files" && (
+          <FilesPanel
+            onClose={() => setRight(null)}
+            onOpenFile={(rel, name) => {
+              // The panel speaks workspace-relative; the viewer stores the absolute path, same as
+              // every other door to it, so a saved workspace needs no second path shape.
+              addNode("file", name, `${workspace.path}/${rel}`);
+            }}
+          />
+        )}
+      </aside>
 
       {wallMenu !== null && (
         <WallpaperPicker
@@ -1248,294 +1314,122 @@ export default function App() {
           onClose={() => setWallMenu(null)}
         />
       )}
-
-      {/* A blank grid reads as a broken app. With no agent installed the dock is all disabled, so
-          the usual hint would point at a dock you cannot use; show the install panel instead. Both
-          go away the moment there is a node to look at. */}
-      {nodes.length === 0 &&
-        (noAgentsInstalled(agents) ? (
-          <Onboarding agents={agents} onRecheck={recheckAgents} />
-        ) : (
-          <div className="identra-empty">
-            <p className="identra-empty__lead">This workspace is empty.</p>
-            {/* Two ways in, in the order they are worth trying. Saying what you want is the whole
-                product and it is one keystroke away, so it leads; the dock is the manual path for
-                when you already know which agent you want. An empty canvas is the one screen where
-                naming the shortcut costs nothing, and it is where someone is looking for a way in. */}
-            <p className="identra-empty__hint">
-              Say what you want done in the bar below — press{" "}
-              <kbd className="identra-empty__kbd">{MOD_LABEL}</kbd> from
-              anywhere — and an orchestrator breaks the work up and wires the
-              agents it needs.
-            </p>
-            <p className="identra-empty__hint">
-              Or pick an agent from the dock to run one yourself. Drop in a
-              second and draw a wire between them, and they can split the work
-              between themselves.
-            </p>
-          </div>
-        ))}
-
-      {/* One column at the top of the window, so the banner and the bar stack instead of landing on
-          top of each other. They used to be independently fixed at top 0 and top 12, and the banner
-          drew above: a workspace that could not save covered its own workspace menu, which is the
-          control you reach for to go somewhere writable. Whatever height the message wraps to, the
-          bar now begins under it. */}
-      <div className="identra-topstack">
-        {saveError !== null && (
-          // It stays until a save works. A canvas that is not on disk is not a thing to mention
-          // once and then hide: every drag from here is work that will not be there tomorrow, and
-          // the user is the only one who can do anything about a full disk or a folder they cannot
-          // write to.
-          <div className="identra-save-error" role="alert">
-            <strong>This workspace is not being saved.</strong> {saveError}
-          </div>
-        )}
-        <div className="identra-topbar">
-          {/* The mark, not a button: the anchor that says whose desktop this is. Going home is the
-            workspace menu's job, one control to the right. */}
-          <img
-            className="identra-logo identra-topbar__logo"
-            src={logo}
-            alt=""
-          />
-          <WorkspaceMenu
-            workspace={workspace}
-            onOpen={(w) => void openWorkspace(w)}
-            onRenamed={setWorkspace}
-            onDeleted={() => {
-              // Back to the picker. The workspace under us is gone, so there is nothing to show and
-              // nothing to save into.
-              setWorkspace(null);
-              setNodes([]);
-              setEdges([]);
-              nodesRef.current = [];
-              edgesRef.current = [];
-            }}
-          />
-          <button
-            className="identra-topbar__btn"
-            data-on={panelOpen}
-            onClick={() => {
-              // One slide-over at a time: they share the same edge of the window.
-              setFilesOpen(false);
-              setPanelOpen((v) => !v);
-            }}
-            title="What your agents are working on"
-          >
-            Work
-            {/* The ambient signal that memory is accumulating: a count on the toggle, no toast
-              stream. It reads whether or not the panel is open. */}
-            {memoryCount > 0 && (
-              <span className="identra-topbar__badge">{memoryCount}</span>
-            )}
-          </button>
-          <button
-            className="identra-topbar__btn"
-            data-on={filesOpen}
-            onClick={() => {
-              setPanelOpen(false);
-              setFilesOpen((v) => !v);
-            }}
-            title="Browse and search this workspace's files"
-          >
-            Files
-          </button>
-          {/* One dev server per workspace: the button is the way to start it, so the button goes
-            while one is on the board. Stopping is closing the node, like everything else. */}
-          {devCmd !== null && !nodes.some((n) => n.data.kind === "dev") && (
-            <button
-              className="identra-topbar__btn"
-              onClick={() => addNode("dev", "Dev server")}
-              title={`Start the dev server: ${devCmd.join(" ")}`}
-            >
-              Run
-            </button>
-          )}
-          {/* Both are hidden on an empty canvas. There is nothing to tidy and nothing to map, and a
-            row of controls that do nothing is how an empty state stops reading as a first run. */}
-          {nodes.length > 0 && (
-            <>
-              <button
-                className="identra-topbar__btn"
-                onClick={tidy}
-                title="Lay the nodes out on a grid. Moves them, nothing else."
-              >
-                Tidy
-              </button>
-              <button
-                className="identra-topbar__btn"
-                data-on={minimapOn}
-                onClick={() => setMinimapOn((v) => !v)}
-                title="Show a map of the whole canvas"
-              >
-                Map
-              </button>
-              <button
-                className="identra-topbar__btn"
-                onClick={() => void exportCanvas()}
-                title="Save this canvas to a file"
-              >
-                Export
-              </button>
-            </>
-          )}
-          {/* Import stays available on an empty canvas: bringing a board in is exactly what you want
-            to do with an empty one, and it is the only one of these that is useful with nothing
-            on screen. */}
-          <button
-            className="identra-topbar__btn"
-            onClick={() => void importCanvas()}
-            title="Replace this canvas with one from a file"
-          >
-            Import
-          </button>
-          <button
-            className="identra-topbar__btn"
-            data-on={settingsOpen}
-            onClick={() => setSettingsOpen((v) => !v)}
-            title="Settings for this machine"
-          >
-            Settings
-          </button>
-          {/* Two different exits, and they were one control until someone pointed out they are
-              not the same act at all. Leaving a workspace is going back to the list of your
-              projects; leaving Identra is ending every agent on the machine. Putting both behind
-              one word called Quit meant the smaller one was unreachable and the bigger one was a
-              surprise. */}
-          <button
-            className="identra-topbar__btn"
-            onClick={() => void goHome()}
-            title="Back to your workspaces. The agents in this one keep running."
-          >
-            Home
-          </button>
-          {/* Closing Identra is not offered here, only Home. Inside a workspace the thing you
-              usually want is the other workspace, and the button that ends every agent on the
-              machine should not sit one pixel from the one that lists your projects. It lives on
-              the home screen, which is where leaving is what you came to do. ctrl+Q still works
-              from anywhere for people who know it. */}
-        </div>
-      </div>
-
-      {panelOpen && (
-        <WorkPanel initialTab={panelTab} onClose={() => setPanelOpen(false)} />
-      )}
-      {filesOpen && (
-        <FilesPanel
-          onClose={() => setFilesOpen(false)}
-          onOpenFile={(rel, name) => {
-            // The panel speaks workspace-relative; the viewer node stores the absolute path,
-            // same as every other door to it, so a saved canvas needs no second path shape.
-            addNode("file", name, `${workspace.path}/${rel}`);
-          }}
-        />
-      )}
       {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
-      {focused !== null &&
-        (() => {
-          // Resolved at render rather than stored, so a renamed node's focus bar follows it.
-          const node = nodes.find((n) => n.id === focused);
-          return node === undefined ? null : (
-            <FocusView
-              nodeId={focused}
-              title={node.data.title}
-              kind={node.data.kind}
-              onClose={() => {
-                setFocused(null);
-                // Hand the pty's size back to the node on the canvas. Closing this overlay does not
-                // change that node's box, so nothing it watches fires, and it would go on drawing
-                // an agent wrapped for a full window it is no longer in.
-                window.dispatchEvent(new Event(REFIT_EVENT));
-              }}
-            />
-          );
-        })()}
-
-      {/* Above the dock, because the dock is how you place one agent yourself and this is how you
-          ask for the whole job to be done. Hidden until an agent exists to run it: on a machine
-          with nothing installed the onboarding panel is the thing to read, and a command bar that
-          can only fail is worse than no command bar. */}
-      {!noAgentsInstalled(agents) && (
-        <CommandBar
-          seatName={seatName}
-          state={dispatch}
-          plan={plan}
-          seatId={seat}
-          awaitingAnswer={seatAsking}
-          // The last word on a dispatch, wherever it went wrong.
-          //
-          // `sending` disables the input, which is right while an instruction is genuinely on its
-          // way and a disaster if it latches: the bar is the only way to talk to the orchestrator,
-          // so a stuck `sending` is an app that has to be restarted to accept another word.
-          // Every failure `sendToSeat` knows about already reports itself, but it also awaits
-          // several calls that can reject on their own — an IPC that goes away mid-dispatch is
-          // enough — and an unhandled rejection there leaves the bar disabled with nothing said.
-          // Catching at the one place every path returns through is what makes that impossible,
-          // rather than guarding each await and hoping the next one added gets the same treatment.
-          onSubmit={(instruction) =>
-            void sendToSeat(instruction).catch((e: unknown) =>
-              setDispatch({
-                kind: "failed",
-                error: `The instruction did not go anywhere: ${String(e)}`,
-              }),
-            )
-          }
-        />
-      )}
-
-      <div className="identra-dock">
-        {agents.map((a) => {
-          const state = a.available
-            ? a.logged_in
-              ? "ready"
-              : "setup"
-            : "missing";
-          return (
-            <button
-              key={a.id}
-              className="identra-dock__btn"
-              data-state={state}
-              disabled={state === "missing"}
-              title={
-                a.available
-                  ? a.logged_in
-                    ? `${a.name}, signed in`
-                    : `${a.name}, installed but not signed in`
-                  : `${a.name}, not installed`
-              }
-              onClick={() => {
-                // A signed-in agent just opens. One that is installed but not signed in would drop
-                // the user into a raw login prompt with no idea why, so I name what is about to
-                // happen first. The node still runs the real CLI, which is where the sign-in lives,
-                // so this is a heads-up and not a second login path to keep in step.
-                if (
-                  state === "setup" &&
-                  !window.confirm(
-                    `${a.name} is installed but not signed in.\n\nOpening it will start its own sign-in in the node. Follow the prompts there, then the dot turns green.`,
-                  )
-                ) {
-                  return;
-                }
-                addNode(a.id, a.name);
-              }}
-            >
-              <AgentIcon kind={a.id} className="identra-dock__tile" />
-              <span className="identra-dock__label">{a.name}</span>
-              <span className="identra-dock__dot" data-state={state} />
-            </button>
-          );
-        })}
-        <button
-          className="identra-dock__btn"
-          data-state="ready"
-          title="Browser, open a web view on the canvas"
-          onClick={() => addNode("browser", "Browser", "http://localhost:1420")}
-        >
-          <AgentIcon kind="browser" className="identra-dock__tile" />
-          <span className="identra-dock__label">Browser</span>
-        </button>
-      </div>
     </div>
+  );
+}
+
+// One tab. It is the node's whole existence in the shell: open it into a pane, or close it for
+// good. The dot is here as well as on the pane because a tab you are not looking at is exactly the
+// one you want to know has stopped.
+function Tab({
+  node,
+  index,
+  active,
+  onOpen,
+  onClose,
+}: {
+  node: CanvasNode;
+  index: number;
+  active: boolean;
+  onOpen: () => void;
+  onClose: () => void;
+}) {
+  const terminal =
+    node.kind !== "browser" && node.kind !== "file" && node.kind !== "note";
+  return (
+    <div className="identra-tab" data-active={active || undefined} role="tab">
+      <button className="identra-tab__open" onClick={onOpen}>
+        {terminal && <TabDot nodeId={node.id} />}
+        <AgentIcon kind={node.kind} className="identra-tab__icon" />
+        <span className="identra-tab__title">{node.title || node.kind}</span>
+        {index < 9 && <span className="identra-tab__num">{index + 1}</span>}
+      </button>
+      <button
+        className="identra-tab__close"
+        title={
+          node.kind === "dev"
+            ? "Stop the dev server and close this tab"
+            : "Stop this agent and close this tab. Its conversation is forgotten."
+        }
+        onClick={onClose}
+      >
+        &times;
+      </button>
+    </div>
+  );
+}
+
+function TabDot({ nodeId }: { nodeId: string }) {
+  const state = useNodeState(nodeId);
+  return <span className="identra-node__dot" data-state={state} />;
+}
+
+// The split tree, drawn. Flex the whole way down, so a split is a box beside a box and the browser
+// does the arithmetic. Ratios are not stored or dragged in v0.2.0: an even split is what a split
+// means until someone has asked for it to mean something else.
+function PaneTreeView({
+  pane,
+  nodes,
+  focusLeaf,
+  onFocusLeaf,
+  onClosePane,
+  closable,
+  onSetCwd,
+  onPreviewUrl,
+}: {
+  pane: PaneTree;
+  nodes: CanvasNode[];
+  focusLeaf: string;
+  onFocusLeaf: (id: string) => void;
+  onClosePane: (id: string) => void;
+  closable: boolean;
+  onSetCwd: (nodeId: string, cwd: string) => void;
+  onPreviewUrl: (nodeId: string, url: string) => void;
+}) {
+  if (pane.kind === "split") {
+    return (
+      <div className="identra-split" data-dir={pane.dir}>
+        {[pane.a, pane.b].map((half) => (
+          <PaneTreeView
+            key={half.id}
+            pane={half}
+            nodes={nodes}
+            focusLeaf={focusLeaf}
+            onFocusLeaf={onFocusLeaf}
+            onClosePane={onClosePane}
+            closable={closable}
+            onSetCwd={onSetCwd}
+            onPreviewUrl={onPreviewUrl}
+          />
+        ))}
+      </div>
+    );
+  }
+  const node = nodes.find((n) => n.id === pane.nodeId);
+  if (node === undefined) {
+    return (
+      <div
+        className="identra-pane identra-pane--empty"
+        data-focused={pane.id === focusLeaf || undefined}
+        onMouseDownCapture={() => onFocusLeaf(pane.id)}
+      >
+        <p>Pick a tab to show it here.</p>
+      </div>
+    );
+  }
+  return (
+    <Pane
+      // Keyed on both, so moving a node to the other half of a split remounts its terminal into the
+      // box it is actually in rather than carrying the old one's size across.
+      key={`${pane.id}:${node.id}`}
+      node={node}
+      focused={pane.id === focusLeaf}
+      onFocus={() => onFocusLeaf(pane.id)}
+      onClosePane={() => onClosePane(pane.id)}
+      closable={closable}
+      onSetCwd={onSetCwd}
+      onPreviewUrl={onPreviewUrl}
+    />
   );
 }

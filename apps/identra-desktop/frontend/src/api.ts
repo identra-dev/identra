@@ -36,7 +36,17 @@ export type CanvasNode = {
   locked: boolean;
 };
 
-export type Edge = { id: string; source: string; target: string };
+// Who granted a connection. "unknown" is not a placeholder for "you": an edge saved before this
+// field existed has no record of who made it, and the connections list saying "you" for it would be
+// lying about a permission. Mirrors `Grantor` in identra-core canvas.rs.
+export type Grantor = "unknown" | "you" | "agent";
+
+export type Edge = {
+  id: string;
+  source: string;
+  target: string;
+  by: Grantor;
+};
 
 export type Viewport = { x: number; y: number; zoom: number };
 

@@ -47,9 +47,6 @@ body {
 }
 /* Transparent so the wallpaper layer behind it shows through. The layer always renders, and its
    default is the plain --bg this used to be. */
-.react-flow {
-  background: transparent;
-}
 .identra-wallpaper {
   position: absolute;
   inset: 0;
@@ -63,15 +60,9 @@ body {
   background: var(--wallpaper-scrim);
 }
 
-/* Strip react-flow's default node chrome; the .identra-node draws its own. */
-.react-flow__node-agent,
-.react-flow__node-browser {
-  padding: 0;
-  border: none;
-  background: transparent;
-  border-radius: 10px;
-}
-
+/* The pane body, shared by every kind of pane. It was the canvas node's box and it survives
+   unchanged in everything but where it gets its size: a pane fills the leaf it is in rather than a
+   width and a height it remembered. */
 .identra-node {
   display: flex;
   flex-direction: column;
@@ -83,14 +74,14 @@ body {
   overflow: hidden;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
-.identra-node__header {
+.identra-node__header,
+.identra-pane__header {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
   background: var(--header);
   border-bottom: 1px solid var(--panel-edge);
-  cursor: grab;
   user-select: none;
 }
 /* The whole state indicator is this one dot; its color is the data-state, not six components. */
@@ -119,16 +110,21 @@ body {
     opacity: 0.35;
   }
 }
-/* 20px brand tile, shared by node headers and dock buttons. The mark inside is an svg using
-   currentColor, so the tile's own color drives the ink and a lettermark fallback matches it. */
+/* 20px brand tile, shared by pane headers, tabs, the sidebar and the workspace tiles. The mark
+   inside is an svg using currentColor, so the tile's own color drives the ink and a lettermark
+   fallback matches it. */
 .identra-node__icon svg,
-.identra-dock__tile svg {
+.identra-tab__icon svg,
+.identra-preview__tile svg,
+.identra-side__tile svg {
   width: 13px;
   height: 13px;
   display: block;
 }
 .identra-node__icon,
-.identra-dock__tile {
+.identra-tab__icon,
+.identra-preview__tile,
+.identra-side__tile {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -144,43 +140,13 @@ body {
   font-size: 13px;
   font-weight: 600;
 }
-/* Connection ports: small Yaru dots on the node sides. */
-.react-flow__handle.identra-port {
-  width: 9px;
-  height: 9px;
-  background: var(--panel);
-  border: 2px solid var(--state-missing);
-  border-radius: 50%;
+/* Browser pane: Yaru URL bar under the header, iframe for a body. */
+.identra-pane__url {
+  padding: 6px 8px;
+  background: var(--header);
+  border-bottom: 1px solid var(--panel-edge);
 }
-.react-flow__handle.identra-port:hover {
-  border-color: var(--state-ready);
-}
-.react-flow__edge-path {
-  stroke: var(--edge-idle);
-  stroke-width: 2;
-}
-/* A wire drawn onto an agent that is already running. It is saved and it is real, and it carries no
-   context until that node next starts, because a CLI reads its MCP servers once at startup. Dashed
-   because the connection is pending rather than broken: the same visual grammar as a dashed border
-   anywhere else, something on its way to being solid. Dimmer than a live edge so a board of working
-   wires does not have to compete with a note about one that is waiting. */
-.identra-edge--inert .react-flow__edge-path {
-  stroke: var(--edge-idle);
-  opacity: 0.55;
-}
-/* React Flow draws the label as SVG text with its own background rect, so both are set here. Small
-   and low contrast on purpose: it is an explanation you read once and then stop needing, and it sits
-   on the canvas rather than in a panel, where anything loud would be in the way for as long as the
-   wire exists. */
-.identra-edge--inert .react-flow__edge-text {
-  fill: var(--text-dim, #b8b8b8);
-  font-size: 10px;
-}
-.identra-edge--inert .react-flow__edge-textbg {
-  fill: var(--panel, #2c2c2c);
-}
-/* Browser node: Yaru URL bar in the header, iframe for a body. */
-.identra-node__url {
+.identra-pane__url input {
   flex: 1;
   min-width: 0;
   font: inherit;
@@ -191,7 +157,7 @@ body {
   border-radius: 6px;
   padding: 4px 8px;
 }
-.identra-node__url:focus {
+.identra-pane__url input:focus {
   outline: none;
   border-color: var(--state-ready);
 }
@@ -252,41 +218,12 @@ body {
   white-space: nowrap;
 }
 
-.identra-dock {
-  position: fixed;
-  left: 50%;
-  bottom: 22px;
-  transform: translateX(-50%);
-  display: flex;
-  gap: 8px;
-  padding: 8px;
-  border-radius: 14px;
-  background: rgba(44, 44, 44, 0.9);
-  border: 1px solid var(--panel-edge);
-  backdrop-filter: blur(8px);
-}
-/* The minimap borrows the panel colours rather than React Flow's defaults, which are built for a
-   light canvas and glare on this one. It sits above the dock so the two never overlap. */
-.identra-minimap {
-  background: rgba(44, 44, 44, 0.92);
-  border: 1px solid var(--panel-edge);
-  border-radius: 10px;
-  /* Clear of the command bar, which sits at 110px and grows upward: the orchestrator's terminal is
-     260px of that, plus the input row and whatever status lines it is carrying. On a narrow window
-     the bar runs the full width, so stacking above it is the only placement that does not overlap
-     at some size. */
-  bottom: 480px;
-}
-
-/* The command center bar, sitting directly above the dock and sharing its shape so the two read as
-   one surface. It is wider than the dock on purpose: the dock is a row of buttons, this is where a
+/* The command center bar, at the foot of the centre column. It is wide on purpose: this is where a
    sentence goes, and an input that looks like a search box invites two words instead of a task. */
 .identra-cmd {
-  position: fixed;
-  left: 50%;
-  bottom: 110px;
-  transform: translateX(-50%);
-  width: min(720px, calc(100vw - 48px));
+  flex: none;
+  margin: 0 auto 12px;
+  width: min(720px, calc(100% - 24px));
   padding: 8px;
   border-radius: 14px;
   background: rgba(44, 44, 44, 0.9);
@@ -444,20 +381,6 @@ body {
 
 /* The seat marker on a node. The aubergine accent, matching the command bar's focus ring, because
    the two are the same thing seen from either end: this is the node that bar types into. */
-.react-flow__node.is-seat .identra-node {
-  border-color: var(--state-attention);
-}
-.identra-node__seat {
-  flex: none;
-  padding: 1px 6px 2px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--state-attention) 34%, transparent);
-  border: 1px solid var(--state-attention);
-  color: #e6d4e4;
-  font-size: 10px;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-}
 
 /* The dev server's detected address, worn on the node like the seat badge, in the running green.
    A button, because clicking it opens the page in a browser node. It can be long, so it gives
@@ -484,61 +407,6 @@ body {
 
 /* Launcher tile: icon over label, a small auth dot in the corner. The three data-states read as
    full-color (ready), dimmed (setup), greyed (missing). */
-.identra-dock__btn {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  font: inherit;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text);
-  background: transparent;
-  border: none;
-  border-radius: 9px;
-  padding: 6px 8px;
-  cursor: pointer;
-}
-.identra-dock__btn:hover:not([data-state="missing"]) {
-  background: rgba(255, 255, 255, 0.06);
-}
-.identra-dock__btn[data-state="ready"]:hover .identra-dock__tile {
-  box-shadow: 0 0 0 2px var(--yaru-orange);
-}
-.identra-dock__btn[data-state="setup"] {
-  opacity: 0.7;
-}
-.identra-dock__btn[data-state="missing"] {
-  opacity: 0.4;
-  cursor: default;
-}
-.identra-dock__btn[data-state="missing"] .identra-dock__tile {
-  filter: grayscale(1);
-}
-.identra-dock__label {
-  max-width: 64px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.identra-dock__dot {
-  position: absolute;
-  top: 3px;
-  right: 5px;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--state-ready);
-  box-shadow: 0 0 0 1.5px var(--panel);
-}
-.identra-dock__dot[data-state="setup"] {
-  background: var(--state-setup);
-}
-.identra-dock__dot[data-state="missing"] {
-  background: transparent;
-  box-shadow: inset 0 0 0 1.5px var(--state-missing);
-}
 
 /* The home screen: a navbar with the three ways in, and the workspaces as a grid of board
    cards. The preview is the biggest thing on each card because a board is recognized by its
@@ -676,11 +544,8 @@ body {
 /* The card's preview stretches with its cell; the drawing scales through the viewBox. Scoped
    under the card so it outweighs the fixed postage-stamp size of the base rule below. */
 .identra-home__card .identra-preview {
-  width: 100%;
-  height: auto;
-  aspect-ratio: 5 / 3;
-  border-radius: 6px;
   margin-bottom: 7px;
+  min-height: 28px;
 }
 .identra-home__name {
   font-size: 14px;
@@ -697,56 +562,30 @@ body {
 }
 
 /* A board in miniature, on its own wallpaper. Same scrim rule as the real canvas. */
+/* What is running in a workspace, as a row of its agents' marks. Not a thumbnail of anything: see
+   the note at the top of BoardPreview.tsx for why the miniature board went. */
 .identra-preview {
-  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 5px;
   flex: none;
-  width: 96px;
-  height: 60px;
-  border: 1px solid var(--panel-edge);
-  border-radius: 4px;
-  overflow: hidden;
-  background-size: cover;
-  background-position: center;
+  min-height: 24px;
 }
-.identra-preview[data-scrim]::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: var(--wallpaper-scrim);
+.identra-preview__more {
+  font-size: 11px;
+  color: var(--muted);
 }
 /* Above the scrim: the scrim dims the picture, and the node shapes are the point of the tile,
    so they draw on top of it exactly as real nodes sit above the real canvas. The svg carries a
    viewBox, so it fills whatever size the span is given. */
-.identra-preview svg {
-  position: relative;
-  z-index: 1;
-  display: block;
-  width: 100%;
-  height: 100%;
-}
 
 /* A note an agent left for its human. Deliberately unlike a node: no chrome, no ports, nothing to
    wire. Yaru's paper yellow so it reads as a sticky on the desk, not another window. */
-.identra-note {
-  width: 100%;
-  height: 100%;
-  background: #f9e2af;
-  color: #2a2118;
-  border-radius: 8px;
-  padding: 12px 14px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-  overflow: auto;
-}
 .identra-note__body {
   font-size: 13px;
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
-}
-.react-flow__node-note {
-  padding: 0;
-  border: none;
-  background: transparent;
 }
 
 /* A node whose agent is gone. Grey and still: it is not idle, there is nothing behind it. */
@@ -761,10 +600,7 @@ body {
    points at the dock, and disappears the moment there is a node to look at. Not interactive, so it
    never gets in the way of a drag. */
 .identra-empty {
-  position: fixed;
-  left: 50%;
-  top: 42%;
-  transform: translate(-50%, -50%);
+  margin: auto;
   max-width: 380px;
   text-align: center;
   pointer-events: none;
@@ -875,20 +711,6 @@ body {
    independently fixed things, so the bar is always below the banner however tall the message wraps.
    The column itself is not clickable, only what is in it, or it would eat every drag that started
    near the top of the canvas. */
-.identra-topstack {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 8;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  pointer-events: none;
-}
-.identra-topstack > * {
-  pointer-events: auto;
-}
 
 /* Hello.
    The whole window, blurred, behind one line in the middle of it. This is the first second of the
@@ -1084,58 +906,20 @@ body {
 /* Top left: which workspace, and the way into what the agents are doing. Wraps rather than running
    off the edge: this is eight controls in a row and a half-width window is an ordinary thing to
    have next to an editor. */
-.identra-topbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin: 12px;
-  max-width: calc(100vw - 24px);
-}
-.identra-topbar__btn {
-  background: rgba(44, 44, 44, 0.86);
-  border: 1px solid var(--panel-edge);
-  border-radius: 6px;
-  padding: 5px 10px;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text);
-  cursor: pointer;
-  backdrop-filter: blur(6px);
-}
-.identra-topbar__btn:hover {
-  border-color: var(--yaru-orange);
-}
-.identra-topbar__btn[data-on="true"] {
-  background: var(--yaru-orange);
-  border-color: var(--yaru-orange);
-}
 /* Quit sits with the other controls but reads as the end of the row: a little space before it, and
    red only on hover. It is one click and it stops every agent on the canvas, so it should not be
    the brightest thing in the bar and it should not be reachable by a slip either. */
-.identra-topbar__btn--quit {
-  margin-left: 6px;
-}
-.identra-topbar__btn--quit:hover {
-  background: #c0392b;
-  border-color: #c0392b;
-}
 
 /* The work panel. Docked right, over the canvas: you read it while watching the nodes, so it must
    not push them around. */
+/* Docked in the right column now rather than sliding over the canvas. The column owns the width
+   and the edge; the panel owns everything inside it, unchanged. */
 .identra-panel {
-  position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: 340px;
-  z-index: 6;
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  background: rgba(44, 44, 44, 0.97);
-  border-left: 1px solid var(--panel-edge);
-  backdrop-filter: blur(10px);
+  background: transparent;
 }
 .identra-panel__head {
   display: flex;
@@ -1535,45 +1319,9 @@ body {
 /* Sits to the left of close and behaves the same way: out of sight until you are on the node, so a
    row of nodes is terminals rather than chrome. The exception is a node that is actually locked,
    which stays visible, because a protection you cannot see is one you cannot trust. */
-.identra-node__lock,
-.identra-node__expand {
-  margin-left: auto;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  color: #6b6b6b;
-  font: inherit;
-  font-size: 10px;
-  line-height: 1;
-  padding: 3px 8px;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.12s ease-out;
-}
 /* When both render, expand carries the push and lock sits next to it. Two auto margins would
    otherwise split the free space and open a gap between them. */
-.identra-node__expand ~ .identra-node__lock {
-  margin-left: 4px;
-}
-.identra-node:hover .identra-node__lock,
-.identra-node:hover .identra-node__expand {
-  opacity: 1;
-}
-.identra-node__lock:hover,
-.identra-node__expand:hover {
-  color: var(--text);
-  border-color: var(--panel-edge);
-}
-.identra-node__lock[data-on="true"] {
-  opacity: 1;
-  color: #e6d4e4;
-  border-color: var(--state-attention);
-  background: color-mix(in srgb, var(--state-attention) 26%, transparent);
-}
 /* Close keeps its own right-edge position; the lock takes over pushing the pair over. */
-.identra-node__lock + .identra-node__close {
-  margin-left: 4px;
-}
 
 .identra-node__close {
   margin-left: auto;
@@ -1848,52 +1596,6 @@ body {
 /* Focus mode: one conversation, the whole window. Above every popover, because it is the thing
    being read; below nothing. The terminal keeps its Ubuntu aubergine, so full size still reads
    as the same node, just bigger. */
-.identra-focus {
-  position: fixed;
-  inset: 0;
-  z-index: 30;
-  display: flex;
-  flex-direction: column;
-  background: var(--bg);
-}
-.identra-focus__bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  background: var(--header);
-  border-bottom: 1px solid var(--panel-edge);
-}
-.identra-focus__title {
-  font-size: 13px;
-  font-weight: 600;
-}
-.identra-focus__hint {
-  margin-left: auto;
-  color: #6b6b6b;
-  font-size: 11px;
-}
-.identra-focus__close {
-  background: transparent;
-  border: none;
-  color: #9a9a9a;
-  font-size: 18px;
-  line-height: 1;
-  padding: 0 4px;
-  cursor: pointer;
-}
-.identra-focus__close:hover {
-  color: var(--text);
-}
-.identra-focus__term {
-  flex: 1;
-  min-height: 0;
-  padding: 8px 10px;
-  background: #300a24;
-}
-.identra-focus__term .xterm {
-  height: 100%;
-}
 
 /* The file viewer's body. Recessed like a terminal well, but neutral: this is a document, not a
    console, and tinting it aubergine would say something is running in it. */
@@ -2080,11 +1782,6 @@ body {
   width: 26px;
   height: 26px;
 }
-.identra-topbar__logo {
-  width: 22px;
-  height: 22px;
-  align-self: center;
-}
 .identra-onboard__logo {
   width: 40px;
   height: 40px;
@@ -2124,11 +1821,396 @@ body {
   }
 }
 /* The ambient memory count on the Work toggle: the same shape as the tab count, no toast stream. */
-.identra-topbar__badge {
-  margin-left: 5px;
-  padding: 1px 5px;
+
+/* ── the shell ───────────────────────────────────────────────────────────────
+   Three columns over the wallpaper: what you can open, what is open, and what
+   the project knows. The canvas this replaced was one plane you moved around
+   in; this is three regions that stay where they are, which is the whole point
+   of the change — the arrangement stops being a thing you maintain. */
+.identra-shell {
+  display: grid;
+  grid-template-columns: 208px minmax(0, 1fr) auto;
+  height: 100%;
+}
+.identra-shell > * {
+  position: relative;
+  min-height: 0;
+}
+
+.identra-side {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  background: rgba(36, 36, 36, 0.94);
+  border-right: 1px solid var(--panel-edge);
+  overflow-y: auto;
+}
+.identra-side__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.identra-side__section {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--state-missing);
+  padding: 0 2px;
+}
+.identra-side__agents {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.identra-side__agent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.identra-side__agent:hover:not(:disabled) {
+  background: var(--panel);
+}
+.identra-side__agent:disabled {
+  cursor: default;
+  color: var(--state-missing);
+}
+.identra-side__agent:disabled .identra-side__tile {
+  opacity: 0.4;
+}
+.identra-side__label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.identra-side__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--state-running);
+  flex: none;
+}
+.identra-side__dot[data-state="setup"] {
+  background: var(--state-setup);
+}
+.identra-side__dot[data-state="missing"] {
+  background: var(--state-missing);
+}
+/* Pinned to the bottom, because these are the things you do to the workspace rather than in it. */
+.identra-side__foot {
+  margin-top: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.identra-side__btn {
+  padding: 5px 9px;
+  border: 1px solid var(--panel-edge);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.identra-side__btn:hover,
+.identra-side__btn[data-on="true"] {
+  background: var(--header);
+  border-color: var(--state-ready);
+}
+
+.identra-centre {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 10px 0;
+}
+
+/* Said once, on the first open after the canvas went away. Not an error and not a toast: it is a
+   fact about this release that the user has to read exactly once, so it sits in the flow and goes
+   when they say it can. */
+.identra-notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: 9px;
+  background: var(--header);
+  border: 1px solid var(--state-ready);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.identra-notice button {
+  margin-left: auto;
+  flex: none;
+  padding: 4px 10px;
+  border: 1px solid var(--panel-edge);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.identra-notice button:hover {
+  border-color: var(--state-ready);
+}
+
+/* Every node the workspace has open, in the order they were made. This is the list the canvas was
+   never able to be: a coding task maps to a branch and branches are a list. */
+.identra-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 3px;
+  flex: none;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.identra-tab {
+  display: flex;
+  align-items: stretch;
+  flex: none;
+  border: 1px solid var(--panel-edge);
   border-radius: 8px;
+  background: var(--panel);
+  overflow: hidden;
+}
+.identra-tab[data-active] {
+  border-color: var(--state-ready);
+}
+.identra-tab__open {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 4px 5px 8px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  max-width: 220px;
+}
+.identra-tab__open:hover {
+  background: var(--header);
+}
+.identra-tab__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The number the shortcut uses, said out loud rather than left to be discovered. Only the first
+   nine get one, because that is how many the keys reach. */
+.identra-tab__num {
+  font-size: 10px;
+  color: var(--state-missing);
+  flex: none;
+}
+.identra-tab__close {
+  border: 0;
+  background: none;
+  color: var(--state-missing);
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 7px;
+  cursor: pointer;
+}
+.identra-tab__close:hover {
+  background: #c01c28;
+  color: var(--text);
+}
+.identra-tabs__split {
+  flex: none;
+  margin-left: 4px;
+  padding: 5px 10px;
+  border: 1px dashed var(--panel-edge);
+  border-radius: 8px;
+  background: none;
+  color: var(--state-missing);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.identra-tabs__split:hover {
+  color: var(--text);
+  border-color: var(--state-ready);
+}
+
+.identra-panes {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+/* Splits are even and are not draggable in this release. An even split is what a split means until
+   someone has asked for it to mean something else, and a ratio nobody can change is still better
+   than a ratio nobody can see. */
+.identra-split {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  gap: 8px;
+}
+.identra-split[data-dir="row"] {
+  flex-direction: row;
+}
+.identra-split[data-dir="col"] {
+  flex-direction: column;
+}
+.identra-split > * {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+.identra-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  border-radius: 10px;
+  overflow: hidden;
+}
+/* Which half the keyboard is talking to. Only drawn when there is more than one, because a ring
+   around the only pane is a ring that means nothing. */
+.identra-split .identra-pane[data-focused] {
+  border-color: var(--state-ready);
+}
+.identra-pane--empty {
+  align-items: center;
+  justify-content: center;
+  border-style: dashed;
+  color: var(--state-missing);
+  font-size: 13px;
+}
+.identra-pane .identra-node__term,
+.identra-pane .identra-node__frame,
+.identra-pane .identra-file {
+  flex: 1;
+  min-height: 0;
+}
+
+.identra-right {
+  display: flex;
+  flex-direction: column;
+  width: auto;
+  background: rgba(36, 36, 36, 0.94);
+  border-left: 1px solid var(--panel-edge);
+}
+.identra-right[data-open] {
+  width: 340px;
+}
+.identra-right__tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 6px;
+  border-bottom: 1px solid var(--panel-edge);
+}
+.identra-right[data-open] .identra-right__tabs {
+  flex-direction: row;
+}
+.identra-right__tabs button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 9px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: none;
+  color: var(--state-missing);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  /* Vertical while the column is closed, so the two modes stay reachable without eating 340px. */
+  writing-mode: vertical-rl;
+}
+.identra-right[data-open] .identra-right__tabs button {
+  writing-mode: horizontal-tb;
+}
+.identra-right__tabs button:hover {
+  color: var(--text);
+}
+.identra-right__tabs button[data-on="true"] {
+  color: var(--text);
+  background: var(--panel);
+  border-color: var(--state-ready);
+}
+/* The ambient signal that memory is accumulating: a count on the toggle, no toast stream. It reads
+   whether or not the column is open. */
+.identra-right__badge {
+  min-width: 17px;
+  padding: 0 5px;
+  border-radius: 9px;
   background: var(--yaru-orange);
   color: #fff;
   font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+}
+
+/* One connection: who is joined to whom, who allowed it, and the way to take it back. Denser than
+   a task row because this is a list you audit rather than one you read. */
+.identra-conn {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--panel-edge);
+}
+.identra-conn__pair {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  min-width: 0;
+}
+.identra-conn__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100px;
+}
+.identra-conn__arrow {
+  color: var(--state-missing);
+  flex: none;
+}
+.identra-conn__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--muted, #9a9a9a);
+}
+/* A grant an agent made for itself is the one worth catching an eye. Not an alert — it is a
+   supported thing to do — but it must not read the same as one the person made. */
+.identra-conn[data-by="agent"] .identra-conn__meta {
+  color: var(--state-setup);
+}
+.identra-conn__revoke {
+  margin-left: auto;
+  flex: none;
+  padding: 3px 8px;
+  border: 1px solid var(--panel-edge);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.identra-conn__revoke:hover {
+  background: #c01c28;
+  border-color: #c01c28;
 }

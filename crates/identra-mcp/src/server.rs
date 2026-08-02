@@ -1432,7 +1432,7 @@ fn random_token() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use identra_core::canvas::{Canvas, Edge, Node};
+    use identra_core::canvas::{Canvas, Edge, Grantor, Node};
 
     /// A bus whose canvas never answers. Fine for every tool that does not touch the canvas.
     fn bus_in(dir: PathBuf) -> Bus {
@@ -1916,6 +1916,7 @@ mod tests {
                 id: "e".into(),
                 source: "spawner".into(),
                 target: "helper".into(),
+                by: Grantor::You,
             }],
             ..Canvas::default()
         };
@@ -2027,6 +2028,7 @@ mod tests {
                     id: "e1".into(),
                     source: "a".into(),
                     target: "b".into(),
+                    by: Grantor::You,
                 }],
                 ..Canvas::default()
             },
@@ -2300,6 +2302,7 @@ mod tests {
                 id: "e1".into(),
                 source: "a".into(),
                 target: "b".into(),
+                by: Grantor::You,
             }],
             viewport: Default::default(),
             title: "test".into(),
