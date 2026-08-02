@@ -239,6 +239,28 @@ export type Handshake = { facts: number; at: number };
 export const busHandshakes = () =>
   invoke<Record<string, Handshake>>("bus_handshakes");
 
+// What the agents have done to the working tree. Mirrors `changes.rs` in identra-core.
+//
+// `added`/`removed` are null for a binary file, which is git saying it will not diff this, and a
+// zero there would read as "nothing happened" on a file that entirely changed.
+export type FileChange = {
+  path: string;
+  added: number | null;
+  removed: number | null;
+  state: "added" | "modified" | "deleted" | "renamed" | "untracked";
+  staged: boolean;
+};
+
+export type Changes = {
+  /// Null on a detached HEAD, which is a state worth showing rather than an error.
+  branch: string | null;
+  /// True when this is one of Identra's isolated worktrees rather than the user's own checkout.
+  worktree: boolean;
+  files: FileChange[];
+};
+
+export const workspaceChanges = () => invoke<Changes>("workspace_changes");
+
 export const memorySearch = (query: string, limit?: number) =>
   invoke<Memory[]>("memory_search", { query, limit: limit ?? null });
 

@@ -12,6 +12,7 @@ import SettingsPanel from "./SettingsPanel";
 import WorkPanel from "./WorkPanel";
 import WorkspaceMenu from "./WorkspaceMenu";
 import CommandBar, { MOD_LABEL, type DispatchState } from "./CommandBar";
+import ChangesPanel from "./ChangesPanel";
 import ConnectionsPanel from "./ConnectionsPanel";
 import WallpaperPicker from "./WallpaperPicker";
 import { AgentIcon } from "./icons";
@@ -100,7 +101,7 @@ const DEFAULT_H = 320;
 // is the change. Connections is new, and it is not a convenience: it is the only place a grant of
 // agent-to-agent access can now be seen. Changes and Review are named in the plan and are not
 // built, and an empty tab that says "coming soon" is worse than a column with three honest ones.
-type RightMode = "work" | "files" | "connections";
+type RightMode = "work" | "files" | "changes" | "connections";
 
 // Whether this workspace has been told its canvas is gone. Kept in the browser's own storage rather
 // than in the engine, because it is a fact about what this person has read and not about the
@@ -1289,6 +1290,15 @@ export default function App() {
             Files
           </button>
           <button
+            data-on={right === "changes"}
+            onClick={() =>
+              setRight((cur) => (cur === "changes" ? null : "changes"))
+            }
+            title="What the agents have done to this workspace's files"
+          >
+            Changes
+          </button>
+          <button
             data-on={right === "connections"}
             onClick={() =>
               setRight((cur) => (cur === "connections" ? null : "connections"))
@@ -1307,6 +1317,7 @@ export default function App() {
         {right === "work" && (
           <WorkPanel nodes={nodes} onClose={() => setRight(null)} />
         )}
+        {right === "changes" && <ChangesPanel onClose={() => setRight(null)} />}
         {right === "connections" && (
           <ConnectionsPanel
             nodes={nodes}

@@ -425,6 +425,20 @@ fn bus_handshakes(
     state.bus.handshakes()
 }
 
+/// What the agents have done to this workspace's working tree.
+///
+/// The one question Identra could not answer about itself. Agents run here editing files, and until
+/// now the only way to see what they changed was to open a terminal and run `git status` — inside
+/// the app whose whole purpose is watching agents work. The board says what they claimed and the
+/// memory says what they decided; this is what they did.
+///
+/// A workspace that is not a repository is an ordinary state, since Identra makes empty ones, so
+/// the error is a sentence the panel can print rather than something it has to treat as a fault.
+#[tauri::command]
+fn workspace_changes(state: State<AppState>) -> Result<identra_core::changes::Changes, String> {
+    identra_core::changes::changes(&state.dir()).map_err(|e| e.to_string())
+}
+
 /// Search what the project has learned. Same ranking the agents get: with a model, by meaning;
 /// without one, by words. This is why it goes through the bus opener rather than a bare store.
 #[tauri::command]
@@ -922,6 +936,7 @@ pub fn run() {
             board_list,
             memory_list,
             bus_handshakes,
+            workspace_changes,
             memory_restated,
             memory_superseded,
             memory_search,
