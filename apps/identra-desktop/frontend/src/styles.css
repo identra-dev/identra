@@ -2222,3 +2222,23 @@ body {
   background: #c01c28;
   border-color: #c01c28;
 }
+
+/* The handshake receipt, under the workspace name. Quiet, because it is evidence rather than an
+   alert — but present at all times, because it is the only place the product's central mechanism
+   is visible now that no wire draws itself in front of you. */
+.identra-side__handshake {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text);
+  cursor: help;
+}
+.identra-side__handshake-when {
+  color: var(--state-missing);
+}

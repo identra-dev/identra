@@ -228,6 +228,17 @@ export const memoryRestated = (limit?: number) =>
 export const memorySuperseded = (limit?: number) =>
   invoke<[number, number][]>("memory_superseded", { limit: limit ?? null });
 
+// What each connected agent was handed at its handshake, by node id. This is the only evidence the
+// window has that Identra's central mechanism fired: the handshake happens between an agent's CLI
+// and the bus, and nothing about it is visible from here otherwise.
+//
+// `facts` is what was SENT. Whether the model read them is not observable — the MCP initialize
+// response goes to the agent, not back to us — so nothing built on this may say "knows".
+export type Handshake = { facts: number; at: number };
+
+export const busHandshakes = () =>
+  invoke<Record<string, Handshake>>("bus_handshakes");
+
 export const memorySearch = (query: string, limit?: number) =>
   invoke<Memory[]>("memory_search", { query, limit: limit ?? null });
 
