@@ -371,6 +371,42 @@ fn memory_restated(state: State<AppState>, limit: Option<usize>) -> Result<Vec<i
         .collect())
 }
 
+/// Which of the listed facts a later one revises, as `[stale_id, current_id]` pairs.
+///
+/// Sibling of `memory_restated` and a different question. A restatement says the same thing in
+/// other words; this is the same sentence with a different figure — "the request timeout is 30s"
+/// and later "60s". Both rows are real and the near-duplicate pass keeps both on purpose, because
+/// collapsing them would lose a decision. What was missing everywhere was any mark saying which
+/// one the project settled on, so the panel showed two contradictory facts as equals and the
+/// connect payload handed an agent both.
+///
+/// It returns the pair rather than just the stale id so the panel can name what replaced it. A row
+/// marked out of date, with no way to see what is current, sends the reader hunting through a list
+/// for a fact they cannot identify.
+///
+/// Nothing is hidden and nothing is deleted, here or on the agent's side. The heuristic cannot tell
+/// a project changing its mind from a project with two regions, so it says which is later and lets
+/// the reader decide.
+#[tauri::command]
+fn memory_superseded(
+    state: State<AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<[i64; 2]>, String> {
+    let dir = state.dir();
+    // The same store, filter and limit as `memory_list`, in the same newest-first order, so the two
+    // answers describe the same list. Any drift between them would put the mark on the wrong row.
+    let store = identra_mcp::server::open_memory(&dir)?;
+    let facts = store
+        .recent(&memory_filter(&dir), limit.unwrap_or(50))
+        .map_err(|e| e.to_string())?;
+    let contents: Vec<String> = facts.iter().map(|m| m.content.clone()).collect();
+    Ok(identra_memory::superseded_mask(&contents)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(at, by)| by.map(|newer| [facts[at].id, facts[newer].id]))
+        .collect())
+}
+
 /// Search what the project has learned. Same ranking the agents get: with a model, by meaning;
 /// without one, by words. This is why it goes through the bus opener rather than a bare store.
 #[tauri::command]
@@ -868,6 +904,7 @@ pub fn run() {
             board_list,
             memory_list,
             memory_restated,
+            memory_superseded,
             memory_search,
             memory_status,
             memory_forget,

@@ -1079,6 +1079,14 @@ body {
   font-style: italic;
   cursor: help;
 }
+/* Louder than a restatement, because it means something different. A restatement is the same fact
+   said twice and costs nothing to ignore; this one says the row above it contradicts this row, and
+   both are still going out to agents. */
+.identra-memory__revised {
+  font-style: italic;
+  cursor: help;
+  color: var(--state-setup);
+}
 /* Forget sits at the end of the meta line and stays out of the way until wanted. It is visible on
    hover and whenever it has keyboard focus: hiding it behind hover alone would put the only way to
    correct the project's memory somewhere a keyboard can reach but never see. */
