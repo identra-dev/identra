@@ -16,6 +16,7 @@
 
 pub mod agents;
 pub mod canvas;
+pub mod changes;
 pub mod devserver;
 pub mod files;
 pub mod fileview;

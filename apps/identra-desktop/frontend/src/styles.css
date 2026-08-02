@@ -2242,3 +2242,98 @@ body {
 .identra-side__handshake-when {
   color: var(--state-missing);
 }
+
+/* Changes: the branch line, then files grouped by directory. Denser than the file browser, because
+   this is a list you scan for a shape — six files under src/memory, one under docs — rather than
+   one you navigate. */
+.identra-changes__branch {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--panel-edge);
+  font-size: 12px;
+  color: var(--text);
+}
+/* An agent given its own checkout is working somewhere else entirely, and a diff read as your
+   branch when it is a helper's is how someone commits the wrong thing. */
+.identra-changes__worktree {
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--header);
+  color: var(--state-setup);
+  font-size: 10px;
+  cursor: help;
+}
+.identra-changes__group {
+  padding: 4px 0;
+}
+.identra-changes__dir {
+  padding: 3px 12px;
+  font-size: 11px;
+  color: var(--state-missing);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+.identra-changes__row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 12px 3px 20px;
+  font-size: 12px;
+}
+.identra-changes__row:hover {
+  background: var(--panel);
+}
+.identra-changes__mark {
+  width: 10px;
+  flex: none;
+  font-family: "Ubuntu Mono", Menlo, Consolas, monospace;
+  color: var(--state-missing);
+}
+/* Untracked is the most interesting row in the list — a file an agent made that git would not have
+   shown you — and deleted is the only one where work is leaving rather than arriving. */
+.identra-changes__row[data-state="untracked"] .identra-changes__mark {
+  color: var(--state-running);
+}
+.identra-changes__row[data-state="deleted"] .identra-changes__mark {
+  color: #c01c28;
+}
+.identra-changes__row[data-state="deleted"] .identra-changes__name {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+.identra-changes__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.identra-changes__staged {
+  flex: none;
+  font-size: 10px;
+  color: var(--state-missing);
+  cursor: help;
+}
+.identra-changes__stat {
+  flex: none;
+  display: flex;
+  gap: 5px;
+  font-family: "Ubuntu Mono", Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+.identra-changes__plus {
+  color: var(--state-running);
+}
+.identra-changes__minus {
+  color: #c01c28;
+}
+.identra-changes__binary {
+  flex: none;
+  font-size: 10px;
+  color: var(--state-missing);
+}
