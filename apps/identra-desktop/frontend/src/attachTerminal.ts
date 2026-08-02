@@ -87,7 +87,10 @@ export function useAttachedTerminal(
       // Cheap either way, and the alternative is losing the top of a long reply.
       scrollback: 5000,
       theme: {
-        background: "#300a24",
+        // Matches the pane background in styles.css. Ubuntu aubergine at a third of its chroma:
+        // at full saturation it was tuned for a neutral grey desktop, and inside an aubergine
+        // frame every pane read as a purple block.
+        background: "#1d1019",
         foreground: "#ffffff",
         cursor: "#e95420",
       },
