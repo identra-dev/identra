@@ -2161,3 +2161,56 @@ body {
   line-height: 16px;
   text-align: center;
 }
+
+/* One connection: who is joined to whom, who allowed it, and the way to take it back. Denser than
+   a task row because this is a list you audit rather than one you read. */
+.identra-conn {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--panel-edge);
+}
+.identra-conn__pair {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  min-width: 0;
+}
+.identra-conn__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100px;
+}
+.identra-conn__arrow {
+  color: var(--state-missing);
+  flex: none;
+}
+.identra-conn__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--muted, #9a9a9a);
+}
+/* A grant an agent made for itself is the one worth catching an eye. Not an alert — it is a
+   supported thing to do — but it must not read the same as one the person made. */
+.identra-conn[data-by="agent"] .identra-conn__meta {
+  color: var(--state-setup);
+}
+.identra-conn__revoke {
+  margin-left: auto;
+  flex: none;
+  padding: 3px 8px;
+  border: 1px solid var(--panel-edge);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.identra-conn__revoke:hover {
+  background: #c01c28;
+  border-color: #c01c28;
+}

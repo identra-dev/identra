@@ -16,7 +16,7 @@ use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use identra_core::canvas::{self, Canvas, Edge, Node};
+use identra_core::canvas::{self, Canvas, Edge, Grantor, Node};
 use identra_core::TerminalManager;
 use identra_mcp::server::{bind, serve, Bus};
 
@@ -66,6 +66,7 @@ fn an_agent_reaches_the_bus_and_sees_only_the_peer_it_is_wired_to() {
                 id: "e1".into(),
                 source: "a".into(),
                 target: "b".into(),
+                by: Grantor::You,
             }],
             ..Canvas::default()
         },

@@ -32,13 +32,35 @@ pub struct Node {
     pub locked: bool,
 }
 
-/// A wire between two nodes. The edge is also the authorization for the context bus: two nodes
-/// share context only when an edge joins them.
+/// Who granted a connection.
+///
+/// This exists because `connect_nodes` is a bus command any agent on the bus can issue, so an
+/// agent can grant itself peer access to another agent's context. That was tolerable while the
+/// canvas drew it: a line appeared in front of you, unasked. Nothing draws a line any more, so the
+/// control that lists connections is the only record left — and a list that cannot say which ones
+/// you made is a list you cannot audit.
+///
+/// `Unknown` is the default and it is not a placeholder for `You`. An edge in a canvas written
+/// before this field existed genuinely has no record of who made it, and answering "you" for it
+/// would be the control lying about a permission, which is the one thing it must never do.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Grantor {
+    #[default]
+    Unknown,
+    You,
+    Agent,
+}
+
+/// A connection between two nodes. The edge is also the authorization for the context bus: two
+/// nodes share context only when an edge joins them.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Edge {
     pub id: String,
     pub source: String,
     pub target: String,
+    #[serde(default)]
+    pub by: Grantor,
 }
 
 /// The canvas background, chosen per workspace. A lightweight reference, never image bytes: a
@@ -293,6 +315,22 @@ pub fn save(project_dir: &Path, canvas: &Canvas) -> std::io::Result<()> {
 mod tests {
     use super::*;
 
+    /// A connection written before anyone recorded who made it must not claim you made it.
+    ///
+    /// The control that lists connections is the only place a user can now see that an agent has
+    /// granted itself access to another agent's context, and it reads this field to say so. If an
+    /// old edge defaulted to `You`, every pre-existing grant on every user's disk would be
+    /// presented as one they made themselves — the control would be confidently wrong about exactly
+    /// the thing it exists to be right about.
+    #[test]
+    fn an_edge_with_no_recorded_grantor_does_not_claim_you_made_it() {
+        let edge: Edge = serde_json::from_str(r#"{"id":"a-b","source":"a","target":"b"}"#).unwrap();
+        assert_eq!(edge.by, Grantor::Unknown);
+        // And it round-trips as what it is, rather than being upgraded to a claim on the next save.
+        let back = serde_json::to_string(&edge).unwrap();
+        assert!(back.contains(r#""by":"unknown""#), "{back}");
+    }
+
     /// The board someone spent a week arranging must survive a file that will not parse. Without
     /// the bak, load returns blank and the next debounced save renames straight over the only copy
     /// they had, so a truncated write during a crash quietly costs them the work. It has to still be
@@ -348,6 +386,7 @@ mod tests {
                 id: "e1".into(),
                 source: "n1".into(),
                 target: "n2".into(),
+                by: Grantor::You,
             }],
             viewport: Viewport {
                 x: -100.0,

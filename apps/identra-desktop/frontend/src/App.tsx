@@ -12,6 +12,7 @@ import SettingsPanel from "./SettingsPanel";
 import WorkPanel from "./WorkPanel";
 import WorkspaceMenu from "./WorkspaceMenu";
 import CommandBar, { MOD_LABEL, type DispatchState } from "./CommandBar";
+import ConnectionsPanel from "./ConnectionsPanel";
 import WallpaperPicker from "./WallpaperPicker";
 import { AgentIcon } from "./icons";
 import {
@@ -60,6 +61,7 @@ import {
   type CanvasNode,
   type CanvasResult,
   type Edge,
+  type Grantor,
   type Viewport,
   type Wallpaper,
   type WorkspaceMeta,
@@ -92,9 +94,10 @@ const DEFAULT_W = 480;
 const DEFAULT_H = 320;
 
 // The right column's modes. Files and the work panel already existed as slide-overs; docking them
-// is the change. Changes and Review are named in the plan and are not built, and an empty tab that
-// says "coming soon" is worse than a column with two honest ones.
-type RightMode = "work" | "files";
+// is the change. Connections is new, and it is not a convenience: it is the only place a grant of
+// agent-to-agent access can now be seen. Changes and Review are named in the plan and are not
+// built, and an empty tab that says "coming soon" is worse than a column with three honest ones.
+type RightMode = "work" | "files" | "connections";
 
 // Whether this workspace has been told its canvas is gone. Kept in the browser's own storage rather
 // than in the engine, because it is a fact about what this person has read and not about the
@@ -108,6 +111,7 @@ const CANVAS_NOTICE_KEY = "identra:canvas-gone:";
 export default function App() {
   const [workspace, setWorkspace] = useState<WorkspaceMeta | null>(null);
   const [nodes, setNodes] = useState<CanvasNode[]>([]);
+  const [edges, setEdges] = useState<Edge[]>([]);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   // Which mode the right column is showing, or null when it is collapsed.
   const [right, setRight] = useState<RightMode | null>(null);
@@ -133,13 +137,6 @@ export default function App() {
 
   // scheduleSave persists the whole workspace but each handler only has its own slice; these refs
   // hold the latest of both so a save always writes a consistent nodes+edges pair.
-  //
-  // Edges are a ref and not state on purpose, for now. Nothing in this shell draws a connection —
-  // the wire that used to draw it is what the canvas took with it — so state would be a re-render
-  // nobody watches. That is a gap and not a resolution: an edge is the user's grant of
-  // agent-to-agent access, agents can grant themselves one through `connect_nodes`, and the canvas
-  // at least made that appear in front of you. The control that lists them is the next item in this
-  // release, and it is the thing that turns this back into state.
   const nodesRef = useRef<CanvasNode[]>([]);
   const edgesRef = useRef<Edge[]>([]);
   const titleRef = useRef("");
@@ -214,6 +211,7 @@ export default function App() {
       : await workspaceOpen(w.slug);
     nodesRef.current = canvas.nodes;
     edgesRef.current = canvas.edges;
+    setEdges(canvas.edges);
     titleRef.current = canvas.title;
     viewportRef.current = canvas.viewport;
     // Opening a workspace always starts with no seat. A seat is a running process, and processes do
@@ -300,6 +298,7 @@ export default function App() {
     await saveNow().catch(() => {});
     setWorkspace(null);
     setNodes([]);
+    setEdges([]);
     nodesRef.current = [];
     edgesRef.current = [];
     seatRef.current = null;
@@ -383,6 +382,7 @@ export default function App() {
   const putEdges = useCallback(
     (next: Edge[]) => {
       edgesRef.current = next;
+      setEdges(next);
       scheduleSave();
     },
     [scheduleSave],
@@ -448,17 +448,32 @@ export default function App() {
     [putNodes],
   );
 
+  // Connect two nodes, recording who asked. `by` is not bookkeeping: an agent can call
+  // `connect_nodes` and grant itself access to another agent's context, and the connections panel is
+  // now the only place that shows up. A grant with no attribution is one the user cannot audit.
   const wire = useCallback(
-    (from: string, to: string) => {
+    (from: string, to: string, by: Grantor) => {
       // Same pair twice is the same permission, and a second edge would mean revoking took two
-      // clicks to do one thing.
+      // clicks to do one thing. The first grant keeps its attribution: an agent re-asking for a
+      // connection you already made does not make it the agent's.
       if (edgesRef.current.some((e) => e.source === from && e.target === to)) {
         return;
       }
       putEdges([
         ...edgesRef.current,
-        { id: `${from}->${to}`, source: from, target: to },
+        { id: `${from}->${to}`, source: from, target: to, by },
       ]);
+    },
+    [putEdges],
+  );
+
+  // Take a connection back. `get_peer_context` reads this slice on every call, so a revoke takes
+  // effect on the next read rather than at the next launch — unlike granting one, which a CLI only
+  // picks up when it next starts. The asymmetry is the right way round: a permission should be
+  // slower to give than to take away.
+  const revoke = useCallback(
+    (edgeId: string) => {
+      putEdges(edgesRef.current.filter((e) => e.id !== edgeId));
     },
     [putEdges],
   );
@@ -499,6 +514,7 @@ export default function App() {
       }
       nodesRef.current = imported.nodes;
       edgesRef.current = imported.edges;
+      setEdges(imported.edges);
       titleRef.current = imported.title;
       viewportRef.current = imported.viewport;
       seatRef.current = null;
@@ -810,8 +826,9 @@ export default function App() {
       if (nodesRef.current.some((n) => n.kind === "browser" && n.cwd === url)) {
         return;
       }
+      // The user clicked the address badge, so this connection is theirs.
       const browserId = addNode("browser", "Preview", url);
-      wire(devId, browserId);
+      wire(devId, browserId, "you");
     },
     [addNode, wire],
   );
@@ -864,7 +881,7 @@ export default function App() {
             typeof p.title === "string" && p.title ? p.title : known.name;
           const id = addNode(kind, title);
           if (typeof p.connectTo === "string" && p.connectTo)
-            wire(p.connectTo, id);
+            wire(p.connectTo, id, "agent");
           return { ok: true, id };
         }
         case "connect_nodes": {
@@ -888,7 +905,7 @@ export default function App() {
           // connecting in.
           if (locked(from)) return { ok: false, error: lockedReason(from) };
           if (locked(to)) return { ok: false, error: lockedReason(to) };
-          wire(from, to);
+          wire(from, to, "agent");
           return { ok: true, id: `${from}->${to}` };
         }
         case "add_note": {
@@ -915,7 +932,7 @@ export default function App() {
           }
           const id = addNode("file", title, path);
           if (typeof p.connectTo === "string" && p.connectTo)
-            wire(p.connectTo, id);
+            wire(p.connectTo, id, "agent");
           return { ok: true, id };
         }
         default:
@@ -1000,6 +1017,7 @@ export default function App() {
               // and nothing to save into.
               setWorkspace(null);
               setNodes([]);
+              setEdges([]);
               nodesRef.current = [];
               edgesRef.current = [];
             }}
@@ -1251,8 +1269,31 @@ export default function App() {
           >
             Files
           </button>
+          <button
+            data-on={right === "connections"}
+            onClick={() =>
+              setRight((cur) => (cur === "connections" ? null : "connections"))
+            }
+            title="Which agents can read each other's work, and who allowed it"
+          >
+            Links
+            {/* Counted whether or not the column is open, for the same reason the memory badge is:
+                an agent can grant itself one of these, and a number that only appears once you go
+                looking is not a number that tells you anything happened. */}
+            {edges.length > 0 && (
+              <span className="identra-right__badge">{edges.length}</span>
+            )}
+          </button>
         </div>
         {right === "work" && <WorkPanel onClose={() => setRight(null)} />}
+        {right === "connections" && (
+          <ConnectionsPanel
+            nodes={nodes}
+            edges={edges}
+            onRevoke={revoke}
+            onClose={() => setRight(null)}
+          />
+        )}
         {right === "files" && (
           <FilesPanel
             onClose={() => setRight(null)}
