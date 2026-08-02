@@ -1,27 +1,60 @@
-/* Ubuntu / Yaru: dark neutral canvas, aubergine terminals, that one orange accent. */
+/* Aubergine near-black, one reserved accent, greyscale for everything else.
+   The terminals have always been Ubuntu aubergine (#300a24) and the frame around them was neutral
+   grey, so the app read as a purple rectangle sitting inside a grey one. The frame now shares the
+   terminal's hue at a fraction of its saturation: the same family, so a pane belongs to the window
+   holding it. It is also not the near-black-plus-acid-accent every agent tool ships. */
 :root {
+  /* Surfaces. Three steps and no more: the frame, the chrome raised off it, and the lift a row
+     takes under the pointer. A fourth step is how an interface ends up looking upholstered. */
+  --bg: #16111a;
+  --panel: #1c1620;
+  --header: #241d29;
+  /* Darker than every surface it separates, so a seam reads as a seam rather than as a border
+     drawn around a card. This is the whole of the app's structure: one pixel, no radius, no
+     shadow, no gap. */
+  --panel-edge: #0d0a10;
+
+  --text: #ece8ef;
+  --muted: #8b8294;
+
+  /* The accent is spent on one thing: memory. The recall strip, the facts badge, the handshake
+     receipt, the newest fact — and nothing else. It was previously on every hover, every active
+     tab and every focus ring, which is why it signalled nothing: an accent that marks everything
+     marks nothing. Reserving it is what makes the differentiator the one warm thing on screen. */
   --yaru-orange: #e95420;
-  --bg: #242424;
-  --panel: #2c2c2c;
-  --panel-edge: #1b1b1b;
-  --header: #333333;
-  --text: #f2f2f2;
-  /* One color per node/dock state (Yaru). */
-  --state-ready: #e95420;
-  --state-running: #33d17a;
-  --state-setup: #e5a50a;
-  --state-missing: #5e5c64;
-  /* Aubergine, for a node that asked something and is waiting on you. It is the one state that is
-     about the human rather than the agent, so it gets the brand accent rather than a traffic
-     light. At 9px on a dark header the raw accent is too dark to read, so the dot lightens it and
-     the ring, which has glow spread to carry it, does not. */
-  --state-attention: #77216f;
-  --edge-idle: #5e5c64;
+
+  /* Signals. Three, and they only appear when something is true. */
+  --state-running: #4fd88a;
+  --state-setup: #e0a94b;
+  --state-attention: #b57ac9;
+  /* Idle and missing are quiet on purpose. An agent doing nothing used to glow in the brand
+     colour, which put the loudest thing on screen on the least interesting state. */
+  --state-ready: #6c6376;
+  --state-missing: #6c6376;
+  --edge-idle: #3a3242;
+  /* Structural focus: which pane the keyboard is in, which tab is open. A bright neutral, never
+     the accent, for the reason above. */
+  --edge-focus: #5c5268;
+  --add: #4fd88a;
+  --gone: #ef5f68;
+
+  /* Space. Five values, and every padding and gap in the shell is one of them. The old stylesheet
+     used 4, 5, 6, 7, 8, 9, 10, 12 and 20 with no reason for any of them, which is most of why it
+     read as untidy rather than as dense. */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  /* Radius belongs to things you press. Surfaces are square. */
+  --r: 6px;
+  /* Every number, path and count is monospace, so columns of them line up and a diff stat reads as
+     data rather than as prose. */
+  --mono: "Ubuntu Mono", Menlo, Consolas, monospace;
+
   /* Over a user image the UI cannot trust the contrast, so a scrim pulls any picture toward the
-     app's own background, and the grid dots flip to white so they read on what remains. Both are
-     tokens because they are a pair: a light theme would flip them together, dark scrim to light
-     and white dots to black. */
-  --wallpaper-scrim: linear-gradient(#242424ad, #242424b8);
+     app's own background. Both are tokens because they are a pair. */
+  --wallpaper-scrim: linear-gradient(#16111acc, #16111ae0);
   --wallpaper-dots: #ffffff47;
 }
 
@@ -60,20 +93,6 @@ body {
   background: var(--wallpaper-scrim);
 }
 
-/* The pane body, shared by every kind of pane. It was the canvas node's box and it survives
-   unchanged in everything but where it gets its size: a pane fills the leaf it is in rather than a
-   width and a height it remembered. */
-.identra-node {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  height: 100%;
-  background: var(--panel);
-  border: 1px solid var(--panel-edge);
-  border-radius: 10px;
-  overflow: hidden;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-}
 .identra-node__header,
 .identra-pane__header {
   display: flex;
@@ -142,8 +161,8 @@ body {
 }
 /* Browser pane: Yaru URL bar under the header, iframe for a body. */
 .identra-pane__url {
-  padding: 6px 8px;
-  background: var(--header);
+  padding: var(--s1) var(--s2);
+  background: var(--panel);
   border-bottom: 1px solid var(--panel-edge);
 }
 .identra-pane__url input {
@@ -171,7 +190,11 @@ body {
   flex: 1;
   min-height: 0;
   padding: 6px 8px;
-  background: #300a24;
+  /* Aubergine, dialled back. Ubuntu's #300a24 at full saturation was tuned to sit inside a neutral
+     grey desktop; inside a frame that is already aubergine it was the loudest thing on screen and
+     every pane read as a purple block. Same hue, a third of the chroma: the terminal is still
+     unmistakably Ubuntu and it stops shouting over the work inside it. */
+  background: #1d1019;
 }
 .identra-node__term .xterm {
   height: 100%;
@@ -181,7 +204,7 @@ body {
    context the agent starts from, not an alert, so it reads as part of the node rather than over it. */
 .identra-node__recall {
   padding: 6px 10px 8px;
-  background: #2a0a20;
+  background: #241320;
   border-bottom: 1px solid var(--panel-edge);
   font-size: 12px;
   line-height: 1.45;
@@ -222,13 +245,9 @@ body {
    sentence goes, and an input that looks like a search box invites two words instead of a task. */
 .identra-cmd {
   flex: none;
-  margin: 0 auto 12px;
-  width: min(720px, calc(100% - 24px));
-  padding: 8px;
-  border-radius: 14px;
-  background: rgba(44, 44, 44, 0.9);
-  border: 1px solid var(--panel-edge);
-  backdrop-filter: blur(8px);
+  padding: var(--s2) var(--s3);
+  background: var(--panel);
+  border-top: 1px solid var(--panel-edge);
 }
 .identra-cmd__row {
   display: flex;
@@ -286,7 +305,11 @@ body {
   margin: 0 0 8px;
   padding: 8px 10px;
   border-radius: 9px;
-  background: #300a24;
+  /* Aubergine, dialled back. Ubuntu's #300a24 at full saturation was tuned to sit inside a neutral
+     grey desktop; inside a frame that is already aubergine it was the loudest thing on screen and
+     every pane read as a purple block. Same hue, a third of the chroma: the terminal is still
+     unmistakably Ubuntu and it stops shouting over the work inside it. */
+  background: #1d1019;
   border: 1px solid var(--panel-edge);
   overflow: hidden;
 }
@@ -342,16 +365,23 @@ body {
 .identra-cmd__input:focus ~ .identra-cmd__kbd {
   display: none;
 }
+/* Neutral, not the accent, and the screenshot is what settled it: with an orange Send the eye went
+   straight to the button and slid past "Identra remembers" three inches above it — exactly
+   backwards for a product whose whole claim is the memory. The accent is reserved for memory; this
+   is the one action in a bar that already says what it is for. */
 .identra-cmd__send {
   flex: none;
-  padding: 8px 14px;
-  border-radius: 9px;
-  border: 0;
-  background: var(--yaru-orange);
-  color: #ffffff;
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--edge-idle);
+  border-radius: var(--r);
+  background: var(--header);
+  color: var(--text);
   font: inherit;
   font-size: 13px;
   cursor: pointer;
+}
+.identra-cmd__send:hover:not(:disabled) {
+  border-color: var(--edge-focus);
 }
 .identra-cmd__send:disabled {
   background: #5e5c64;
@@ -591,9 +621,6 @@ body {
 /* A node whose agent is gone. Grey and still: it is not idle, there is nothing behind it. */
 .identra-node__dot[data-state="exited"] {
   background: var(--state-missing);
-}
-.identra-node[data-state="exited"] .identra-node__header {
-  opacity: 0.75;
 }
 
 /* First run: an empty grid with no explanation reads as a broken app. This sits above the canvas,
@@ -925,7 +952,8 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 10px 10px 12px;
+  height: 36px;
+  padding: 0 var(--s2) 0 var(--s3);
   border-bottom: 1px solid var(--panel-edge);
 }
 .identra-panel__tabs {
@@ -1198,7 +1226,7 @@ body {
 /* The one you are in is marked, so the list is never ambiguous about where you are. */
 .identra-ws__pick[data-on="true"] {
   background: var(--header);
-  box-shadow: inset 2px 0 0 var(--yaru-orange);
+  box-shadow: inset 2px 0 0 var(--edge-focus);
 }
 .identra-ws__name {
   font-size: 12.5px;
@@ -1289,38 +1317,11 @@ body {
    A dot is something you check; a glow is something you notice, and because it is the agent's brand
    colour you can tell WHICH one is working from the corner of your eye, without reading. Motion is
    the signal, so there is no spinner anywhere on the canvas. */
-@keyframes identra-aura {
-  0%,
-  100% {
-    box-shadow:
-      0 8px 24px rgba(0, 0, 0, 0.35),
-      0 0 10px 1px
-        color-mix(in srgb, var(--aura, var(--yaru-orange)) 20%, transparent);
-  }
-  50% {
-    box-shadow:
-      0 8px 24px rgba(0, 0, 0, 0.35),
-      0 0 19px 3px
-        color-mix(in srgb, var(--aura, var(--yaru-orange)) 36%, transparent);
-  }
-}
-.identra-node[data-state="running"] {
-  animation: 2.4s ease-in-out infinite identra-aura;
-}
 /* A node waiting on an answer holds a still aubergine ring. Still is the point: across a canvas of
    breathing nodes, the one that has stopped and is asking you something is the one that reads as
    different, and it stays legible in the corner of your eye without competing for it. This is the
    accent rather than the agent's own colour because the state belongs to you, not to the agent. */
-.identra-node[data-state="needs-input"] {
-  box-shadow:
-    0 8px 24px rgba(0, 0, 0, 0.35),
-    0 0 0 1.5px var(--state-attention),
-    0 0 16px 2px color-mix(in srgb, var(--state-attention) 45%, transparent);
-}
 /* A node whose agent is gone recedes rather than sitting there looking available. */
-.identra-node[data-state="exited"] {
-  opacity: 0.72;
-}
 
 /* Closing a node is the only way to remove one now, so it has to be reachable. Quiet until you are
    on the node, red once you are on the button: destructive, but not shouting from across the room. */
@@ -1352,16 +1353,9 @@ body {
   color: #f66151;
 }
 
-/* Reduced motion still has to carry the information, so the aura does not disappear, it stops
-   moving: a node holds the bright end of the same glow while it works. */
+/* The dot is the whole state indicator now that the glow around the pane is gone. Reduced motion
+   stops it pulsing; the colour still carries the information on its own. */
 @media (prefers-reduced-motion: reduce) {
-  .identra-node[data-state="running"] {
-    animation: none;
-    box-shadow:
-      0 8px 24px rgba(0, 0, 0, 0.35),
-      0 0 19px 3px
-        color-mix(in srgb, var(--aura, var(--yaru-orange)) 36%, transparent);
-  }
   .identra-node__dot[data-state="running"] {
     animation: none;
   }
@@ -1830,54 +1824,79 @@ body {
 }
 /* The ambient memory count on the Work toggle: the same shape as the tab count, no toast stream. */
 
-/* ── the shell ───────────────────────────────────────────────────────────────
-   Three columns over the wallpaper: what you can open, what is open, and what
-   the project knows. The canvas this replaced was one plane you moved around
-   in; this is three regions that stay where they are, which is the whole point
-   of the change — the arrangement stops being a thing you maintain. */
+/* ═══ the shell ═══════════════════════════════════════════════════════════════
+   Three columns, separated by one pixel and nothing else.
+   
+   What this replaced was three columns of rounded cards with 24px drop shadows floating over a
+   wallpaper, with gaps between the panes. That is a desktop widget, not a tool: the chrome was
+   competing with the work, and every seam was drawn three times over — a gap, then a border, then
+   a shadow. A seam here is a single hairline darker than both surfaces it divides, and a surface
+   never has a radius. Radius is for things you press.
+   
+   The wallpaper is not the app's background any more. It has one job now, and it is a real one:
+   it is what an empty pane shows. See `.identra-pane--empty`. */
+
 .identra-shell {
   display: grid;
-  grid-template-columns: 208px minmax(0, 1fr) auto;
+  grid-template-columns: 216px minmax(0, 1fr) auto;
   height: 100%;
+  background: var(--bg);
 }
-.identra-shell > * {
+/* The three columns, named rather than matched with `> *`.
+   
+   `.identra-shell > *` was the bug that shipped with the shell: it set `position: relative` on
+   every direct child, and the wallpaper is a direct child that has to stay absolutely positioned.
+   Made relative, it became a grid item, took the first column for itself, and pushed the right
+   column onto a second row — which is why the layout was wrong from the day it landed. Matching
+   the columns by name means a layer added behind them can never become one of them. */
+.identra-side,
+.identra-centre,
+.identra-right {
   position: relative;
   min-height: 0;
 }
 
+/* ── left: what you can open ──────────────────────────────────────────────── */
+
 .identra-side {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 10px;
-  background: rgba(36, 36, 36, 0.94);
+  background: var(--panel);
   border-right: 1px solid var(--panel-edge);
   overflow-y: auto;
 }
 .identra-side__head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--s2);
+  padding: var(--s3);
+  border-bottom: 1px solid var(--panel-edge);
 }
+/* A section label, not a heading. Small, wide-tracked and quiet: it names the group below it and
+   then gets out of the way, which is the opposite of what a bold 13px heading does. */
 .identra-side__section {
-  font-size: 11px;
+  padding: var(--s4) var(--s3) var(--s2);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--state-missing);
-  padding: 0 2px;
+  color: var(--muted);
 }
 .identra-side__agents {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  padding: 0 var(--s2);
 }
+/* 32px rows. Airy, because this column is a list you point at rather than one you read down —
+   unlike Changes, which is tight for the opposite reason. */
 .identra-side__agent {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
+  gap: var(--s2);
+  height: 32px;
+  padding: 0 var(--s2);
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--r);
   background: none;
   color: var(--text);
   font: inherit;
@@ -1886,14 +1905,14 @@ body {
   cursor: pointer;
 }
 .identra-side__agent:hover:not(:disabled) {
-  background: var(--panel);
+  background: var(--header);
 }
 .identra-side__agent:disabled {
   cursor: default;
   color: var(--state-missing);
 }
 .identra-side__agent:disabled .identra-side__tile {
-  opacity: 0.4;
+  opacity: 0.35;
 }
 .identra-side__label {
   flex: 1;
@@ -1902,8 +1921,8 @@ body {
   white-space: nowrap;
 }
 .identra-side__dot {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--state-running);
   flex: none;
@@ -1914,19 +1933,23 @@ body {
 .identra-side__dot[data-state="missing"] {
   background: var(--state-missing);
 }
-/* Pinned to the bottom, because these are the things you do to the workspace rather than in it. */
+/* Pinned to the bottom, because these are things you do to the workspace rather than in it, and
+   they should never be the first thing your eye lands on. */
 .identra-side__foot {
   margin-top: auto;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s1);
+  padding: var(--s2);
+  border-top: 1px solid var(--panel-edge);
 }
 .identra-side__btn {
-  padding: 5px 9px;
-  border: 1px solid var(--panel-edge);
-  border-radius: 7px;
-  background: var(--panel);
-  color: var(--text);
+  text-align: left;
+  padding: var(--s1) var(--s2);
+  border: 1px solid transparent;
+  border-radius: var(--r);
+  background: none;
+  color: var(--muted);
   font: inherit;
   font-size: 12px;
   cursor: pointer;
@@ -1934,115 +1957,149 @@ body {
 .identra-side__btn:hover,
 .identra-side__btn[data-on="true"] {
   background: var(--header);
-  border-color: var(--state-ready);
+  color: var(--text);
 }
+
+/* The handshake receipt. The one place the accent earns its keep in this column: it is evidence
+   that the product's central mechanism fired, and it is the only warm thing on the screen. */
+.identra-side__handshake {
+  margin: 0 var(--s3);
+  padding: var(--s2);
+  border-left: 2px solid var(--yaru-orange);
+  background: var(--header);
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text);
+  cursor: help;
+}
+.identra-side__handshake-when {
+  display: block;
+  font-family: var(--mono);
+  color: var(--muted);
+}
+
+/* ── centre: what is open ─────────────────────────────────────────────────── */
 
 .identra-centre {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 10px 10px 0;
+  min-width: 0;
 }
 
-/* Said once, on the first open after the canvas went away. Not an error and not a toast: it is a
-   fact about this release that the user has to read exactly once, so it sits in the flow and goes
-   when they say it can. */
+/* Said once, on the first open after the canvas went away. It is not an error and not a toast, so
+   it sits in the flow, wears the accent's left rule like the other things worth reading, and goes
+   when the reader says it can. */
 .identra-notice {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 8px 12px;
-  border-radius: 9px;
+  gap: var(--s3);
+  padding: var(--s3);
+  border-bottom: 1px solid var(--panel-edge);
+  border-left: 2px solid var(--yaru-orange);
   background: var(--header);
-  border: 1px solid var(--state-ready);
   font-size: 13px;
-  line-height: 1.4;
+  line-height: 1.45;
 }
 .identra-notice button {
   margin-left: auto;
   flex: none;
-  padding: 4px 10px;
-  border: 1px solid var(--panel-edge);
-  border-radius: 6px;
-  background: var(--panel);
+  padding: var(--s1) var(--s3);
+  border: 1px solid var(--edge-idle);
+  border-radius: var(--r);
+  background: none;
   color: var(--text);
   font: inherit;
   font-size: 12px;
   cursor: pointer;
 }
 .identra-notice button:hover {
-  border-color: var(--state-ready);
+  border-color: var(--edge-focus);
 }
 
-/* Every node the workspace has open, in the order they were made. This is the list the canvas was
-   never able to be: a coding task maps to a branch and branches are a list. */
+/* Every agent the workspace has open, in the order they were made. This is the list the canvas
+   could never be: a coding task maps to a branch, and branches are a list.
+   
+   The tabs sit on the chrome and the open one lifts out of it toward the pane below, so the strip
+   reads as a row of files in a folder rather than as a row of buttons. Only the open one carries
+   the accent-free bright rule; a tab that is merely present says so by being there. */
 .identra-tabs {
   display: flex;
   align-items: stretch;
-  gap: 3px;
   flex: none;
+  height: 36px;
+  padding: 0 var(--s2);
+  background: var(--panel);
+  border-bottom: 1px solid var(--panel-edge);
   overflow-x: auto;
-  scrollbar-width: thin;
+  scrollbar-width: none;
 }
 .identra-tab {
   display: flex;
   align-items: stretch;
   flex: none;
-  border: 1px solid var(--panel-edge);
-  border-radius: 8px;
-  background: var(--panel);
-  overflow: hidden;
+  border-right: 1px solid var(--panel-edge);
+  /* A 2px rule under the open tab, not a box around it. A border on four sides makes every tab a
+     card and puts eight edges on screen where one line would do. */
+  box-shadow: inset 0 -2px 0 transparent;
 }
 .identra-tab[data-active] {
-  border-color: var(--state-ready);
+  background: var(--bg);
+  box-shadow: inset 0 -2px 0 var(--edge-focus);
 }
 .identra-tab__open {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 5px 4px 5px 8px;
+  gap: var(--s2);
+  padding: 0 var(--s1) 0 var(--s3);
   border: 0;
   background: none;
-  color: var(--text);
+  color: var(--muted);
   font: inherit;
   font-size: 12px;
   cursor: pointer;
-  max-width: 220px;
+  max-width: 200px;
+}
+.identra-tab[data-active] .identra-tab__open {
+  color: var(--text);
 }
 .identra-tab__open:hover {
-  background: var(--header);
+  color: var(--text);
 }
 .identra-tab__title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* The number the shortcut uses, said out loud rather than left to be discovered. Only the first
-   nine get one, because that is how many the keys reach. */
+/* The number its shortcut uses, said out loud rather than left to be discovered. Monospace, so a
+   row of them is a column. Only the first nine get one, because that is how far the keys reach. */
 .identra-tab__num {
+  flex: none;
+  font-family: var(--mono);
   font-size: 10px;
   color: var(--state-missing);
-  flex: none;
 }
 .identra-tab__close {
   border: 0;
   background: none;
-  color: var(--state-missing);
-  font-size: 15px;
+  color: transparent;
+  font-size: 14px;
   line-height: 1;
-  padding: 0 7px;
+  padding: 0 var(--s2);
   cursor: pointer;
 }
+/* Hidden until you are on the tab. A close button on every tab is eight identical crosses asking
+   to be misread, and this one stops an agent. */
+.identra-tab:hover .identra-tab__close,
+.identra-tab[data-active] .identra-tab__close {
+  color: var(--state-missing);
+}
 .identra-tab__close:hover {
-  background: #c01c28;
-  color: var(--text);
+  color: var(--gone);
 }
 .identra-tabs__split {
   flex: none;
-  margin-left: 4px;
-  padding: 5px 10px;
-  border: 1px dashed var(--panel-edge);
-  border-radius: 8px;
+  padding: 0 var(--s3);
+  border: 0;
   background: none;
   color: var(--state-missing);
   font: inherit;
@@ -2051,23 +2108,27 @@ body {
 }
 .identra-tabs__split:hover {
   color: var(--text);
-  border-color: var(--state-ready);
 }
 
 .identra-panes {
   flex: 1;
   min-height: 0;
   display: flex;
+  /* Transparent, and that is what gives the wallpaper somewhere to be. A pane paints itself
+     opaque, so the layer behind only shows through where nothing is open — an empty split, or a
+     workspace with no agents in it yet. The feature people set per workspace survives, and it
+     stops being decoration nobody could see behind three opaque columns. */
+  background: transparent;
 }
-/* Splits are even and are not draggable in this release. An even split is what a split means until
-   someone has asked for it to mean something else, and a ratio nobody can change is still better
-   than a ratio nobody can see. */
+/* Splits are even and not draggable in this release. An even split is what a split means until
+   somebody asks for it to mean something else, and a ratio nobody can change is still better than
+   a ratio nobody can see. One hairline between the halves — no gap, so the two panes read as one
+   surface divided rather than as two objects placed near each other. */
 .identra-split {
   flex: 1;
   min-width: 0;
   min-height: 0;
   display: flex;
-  gap: 8px;
 }
 .identra-split[data-dir="row"] {
   flex-direction: row;
@@ -2080,27 +2141,44 @@ body {
   min-width: 0;
   min-height: 0;
 }
+.identra-split[data-dir="row"] > * + * {
+  border-left: 1px solid var(--panel-edge);
+}
+.identra-split[data-dir="col"] > * + * {
+  border-top: 1px solid var(--panel-edge);
+}
 .identra-pane {
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
   flex: 1;
+  background: var(--bg);
+}
+.identra-pane__header {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  height: 30px;
+  padding: 0 var(--s3);
   background: var(--panel);
-  border: 1px solid var(--panel-edge);
-  border-radius: 10px;
-  overflow: hidden;
+  border-bottom: 1px solid var(--panel-edge);
+  user-select: none;
 }
-/* Which half the keyboard is talking to. Only drawn when there is more than one, because a ring
-   around the only pane is a ring that means nothing. */
-.identra-split .identra-pane[data-focused] {
-  border-color: var(--state-ready);
+/* Which half the keyboard is in. A 2px rule down the inside edge, drawn only when there is more
+   than one pane — a marker around the only pane marks nothing. */
+.identra-split .identra-pane[data-focused] .identra-pane__header {
+  box-shadow: inset 2px 0 0 var(--edge-focus);
 }
+/* The one pane with no content, and the one place the wallpaper still appears. It stopped being
+   the app's background — three columns cover it — so rather than delete a feature people have set
+   per workspace, it does the job an empty pane needs doing: saying this space is waiting for
+   something, without drawing a dashed rectangle to say it. */
 .identra-pane--empty {
   align-items: center;
   justify-content: center;
-  border-style: dashed;
-  color: var(--state-missing);
+  background: transparent;
+  color: var(--muted);
   font-size: 13px;
 }
 .identra-pane .identra-node__term,
@@ -2110,76 +2188,88 @@ body {
   min-height: 0;
 }
 
+/* ── right: what the project knows ────────────────────────────────────────── */
+
 .identra-right {
   display: flex;
   flex-direction: column;
   width: auto;
-  background: rgba(36, 36, 36, 0.94);
+  background: var(--panel);
   border-left: 1px solid var(--panel-edge);
 }
 .identra-right[data-open] {
-  width: 340px;
+  width: 336px;
 }
 .identra-right__tabs {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 10px 6px;
-  border-bottom: 1px solid var(--panel-edge);
+  gap: var(--s1);
+  padding: var(--s2) var(--s1);
 }
 .identra-right[data-open] .identra-right__tabs {
   flex-direction: row;
+  gap: 0;
+  height: 36px;
+  padding: 0 var(--s2);
+  border-bottom: 1px solid var(--panel-edge);
 }
 .identra-right__tabs button {
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 5px 9px;
-  border: 1px solid transparent;
-  border-radius: 7px;
+  gap: var(--s1);
+  padding: var(--s2) var(--s1);
+  border: 0;
   background: none;
-  color: var(--state-missing);
+  color: var(--muted);
   font: inherit;
   font-size: 12px;
   cursor: pointer;
-  /* Vertical while the column is closed, so the two modes stay reachable without eating 340px. */
+  /* Vertical while the column is shut, so both modes stay reachable without spending 336px on
+     them. It is a rail when closed and a tab bar when open. */
   writing-mode: vertical-rl;
+  box-shadow: inset -2px 0 0 transparent;
 }
 .identra-right[data-open] .identra-right__tabs button {
   writing-mode: horizontal-tb;
+  padding: 0 var(--s3);
+  box-shadow: inset 0 -2px 0 transparent;
 }
 .identra-right__tabs button:hover {
   color: var(--text);
 }
 .identra-right__tabs button[data-on="true"] {
   color: var(--text);
-  background: var(--panel);
-  border-color: var(--state-ready);
+  box-shadow: inset -2px 0 0 var(--edge-focus);
+}
+.identra-right[data-open] .identra-right__tabs button[data-on="true"] {
+  box-shadow: inset 0 -2px 0 var(--edge-focus);
 }
 /* The ambient signal that memory is accumulating: a count on the toggle, no toast stream. It reads
-   whether or not the column is open. */
+   whether or not the column is open, and it is the accent because it is the differentiator. */
 .identra-right__badge {
-  min-width: 17px;
-  padding: 0 5px;
-  border-radius: 9px;
+  min-width: 16px;
+  padding: 0 var(--s1);
+  border-radius: 8px;
   background: var(--yaru-orange);
   color: #fff;
+  font-family: var(--mono);
   font-size: 10px;
   font-weight: 700;
-  line-height: 16px;
+  line-height: 15px;
   text-align: center;
 }
 
-/* One connection: who is joined to whom, who allowed it, and the way to take it back. Denser than
-   a task row because this is a list you audit rather than one you read. */
+/* ── connections ──────────────────────────────────────────────────────────── */
+
+/* Denser than a task row, because this is a list you audit rather than one you read. */
 .identra-conn {
-  padding: 9px 12px;
+  padding: var(--s2) var(--s3);
   border-bottom: 1px solid var(--panel-edge);
 }
 .identra-conn__pair {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--s1);
   font-size: 13px;
   min-width: 0;
 }
@@ -2187,7 +2277,7 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 100px;
+  max-width: 96px;
 }
 .identra-conn__arrow {
   color: var(--state-missing);
@@ -2196,10 +2286,10 @@ body {
 .identra-conn__meta {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 4px;
+  gap: var(--s2);
+  margin-top: var(--s1);
   font-size: 11px;
-  color: var(--muted, #9a9a9a);
+  color: var(--muted);
 }
 /* A grant an agent made for itself is the one worth catching an eye. Not an alert — it is a
    supported thing to do — but it must not read the same as one the person made. */
@@ -2209,102 +2299,89 @@ body {
 .identra-conn__revoke {
   margin-left: auto;
   flex: none;
-  padding: 3px 8px;
-  border: 1px solid var(--panel-edge);
-  border-radius: 6px;
-  background: var(--panel);
-  color: var(--text);
+  padding: 2px var(--s2);
+  border: 1px solid var(--edge-idle);
+  border-radius: var(--r);
+  background: none;
+  color: var(--muted);
   font: inherit;
   font-size: 11px;
   cursor: pointer;
 }
 .identra-conn__revoke:hover {
-  background: #c01c28;
-  border-color: #c01c28;
+  border-color: var(--gone);
+  color: var(--gone);
 }
 
-/* The handshake receipt, under the workspace name. Quiet, because it is evidence rather than an
-   alert — but present at all times, because it is the only place the product's central mechanism
-   is visible now that no wire draws itself in front of you. */
-.identra-side__handshake {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  padding: 6px 8px;
-  border-radius: 7px;
-  background: var(--panel);
-  border: 1px solid var(--panel-edge);
-  font-size: 11px;
-  line-height: 1.35;
-  color: var(--text);
-  cursor: help;
-}
-.identra-side__handshake-when {
-  color: var(--state-missing);
-}
+/* ── changes ──────────────────────────────────────────────────────────────── */
 
-/* Changes: the branch line, then files grouped by directory. Denser than the file browser, because
-   this is a list you scan for a shape — six files under src/memory, one under docs — rather than
-   one you navigate. */
 .identra-changes__branch {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 7px 12px;
+  gap: var(--s2);
+  padding: var(--s2) var(--s3);
   border-bottom: 1px solid var(--panel-edge);
+  font-family: var(--mono);
   font-size: 12px;
   color: var(--text);
 }
-/* An agent given its own checkout is working somewhere else entirely, and a diff read as your
-   branch when it is a helper's is how someone commits the wrong thing. */
+/* An agent given its own checkout is working somewhere else entirely, and a helper's diff read as
+   your own branch is how somebody commits the wrong thing. */
 .identra-changes__worktree {
-  padding: 1px 6px;
-  border-radius: 5px;
-  background: var(--header);
+  padding: 0 var(--s1);
+  border: 1px solid var(--state-setup);
+  border-radius: var(--r);
   color: var(--state-setup);
+  font-family: Ubuntu, sans-serif;
   font-size: 10px;
   cursor: help;
 }
 .identra-changes__group {
-  padding: 4px 0;
+  padding-bottom: var(--s2);
 }
+/* The directory, truncated from the left, because the end of a path is the part that identifies
+   it. `…/identra-desktop/frontend/src` beats `apps/identra-desktop/fron…`. */
 .identra-changes__dir {
-  padding: 3px 12px;
+  padding: var(--s2) var(--s3) var(--s1);
+  font-family: var(--mono);
   font-size: 11px;
-  color: var(--state-missing);
+  color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   direction: rtl;
   text-align: left;
 }
+/* 22px rows. This column is scanned, not pointed at, so it is the tightest thing in the app. */
 .identra-changes__row {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 3px 12px 3px 20px;
+  gap: var(--s2);
+  height: 22px;
+  padding: 0 var(--s3) 0 var(--s4);
   font-size: 12px;
 }
 .identra-changes__row:hover {
-  background: var(--panel);
+  background: var(--header);
 }
 .identra-changes__mark {
-  width: 10px;
+  width: 8px;
   flex: none;
-  font-family: "Ubuntu Mono", Menlo, Consolas, monospace;
-  color: var(--state-missing);
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
 }
 /* Untracked is the most interesting row in the list — a file an agent made that git would not have
    shown you — and deleted is the only one where work is leaving rather than arriving. */
 .identra-changes__row[data-state="untracked"] .identra-changes__mark {
-  color: var(--state-running);
+  color: var(--add);
 }
 .identra-changes__row[data-state="deleted"] .identra-changes__mark {
-  color: #c01c28;
+  color: var(--gone);
 }
 .identra-changes__row[data-state="deleted"] .identra-changes__name {
   text-decoration: line-through;
-  opacity: 0.7;
+  opacity: 0.6;
 }
 .identra-changes__name {
   flex: 1;
@@ -2316,24 +2393,25 @@ body {
 .identra-changes__staged {
   flex: none;
   font-size: 10px;
-  color: var(--state-missing);
+  color: var(--muted);
   cursor: help;
 }
 .identra-changes__stat {
   flex: none;
   display: flex;
-  gap: 5px;
-  font-family: "Ubuntu Mono", Menlo, Consolas, monospace;
+  gap: var(--s1);
+  font-family: var(--mono);
   font-size: 11px;
 }
 .identra-changes__plus {
-  color: var(--state-running);
+  color: var(--add);
 }
 .identra-changes__minus {
-  color: #c01c28;
+  color: var(--gone);
 }
 .identra-changes__binary {
   flex: none;
+  font-family: var(--mono);
   font-size: 10px;
-  color: var(--state-missing);
+  color: var(--muted);
 }
