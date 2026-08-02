@@ -1,8 +1,8 @@
-# The browser node and the agent bridge
+# The browser tab and the agent bridge
 
-The browser node is a web view on the canvas: an iframe pointed at a URL (your dev server, say),
-with a Yaru URL bar in the header. The URL rides in the node's `cwd` field, so it saves and
-reloads with the canvas like any other node. This half ships today and needs no extra tooling.
+The browser tab is a web view: an iframe pointed at a URL (your dev server, say), with a Yaru URL
+bar under the header. The URL rides in the node's `cwd` field, so it saves and reloads with the
+workspace like any other tab. This half ships today and needs no extra tooling.
 
 ## Letting an agent read the page
 
@@ -21,7 +21,7 @@ what the webkitgtk webview can do on its own:
   capture tool being present, and on mapping a React Flow node to screen coordinates. Not worth
   shipping as a core feature when the drive path above is both cleaner and more capable.
 
-Until one of those is wired, the browser node is the human's window on the work: you watch the live
+Until one of those is built, the browser tab is the human's window on the work: you watch the live
 preview hot-reload while the agent edits code, and the agent works from what you tell it or from the
 context bus. That is the honest state, and it is enough for the single-machine flows Identra targets
 today.

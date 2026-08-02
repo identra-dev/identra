@@ -52,11 +52,11 @@ fn node(id: &str, title: &str) -> Node {
 }
 
 #[test]
-fn an_agent_reaches_the_bus_and_sees_only_the_peer_it_is_wired_to() {
+fn an_agent_reaches_the_bus_and_sees_only_the_peer_it_is_connected_to() {
     let dir = std::env::temp_dir().join(format!("identra-bus-http-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
 
-    // A canvas with three nodes where only a and b are wired. c is the control: a valid caller
+    // A workspace with three nodes where only a and b are connected. c is the control: a valid caller
     // still must not see it, because the edge is the authorization.
     canvas::save(
         &dir,
@@ -131,7 +131,7 @@ fn an_agent_reaches_the_bus_and_sees_only_the_peer_it_is_wired_to() {
     assert!(peers.contains("Tests"), "a should see its peer b: {peers}");
     assert!(
         !peers.contains("Docs"),
-        "an unwired node must stay invisible"
+        "an unconnected node must stay invisible"
     );
 
     // c's own secret names c, which has no edges: a valid agent, no peers. c cannot borrow a's view
@@ -141,7 +141,7 @@ fn an_agent_reaches_the_bus_and_sees_only_the_peer_it_is_wired_to() {
         &token_c,
         r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"list_peers"}}"#,
     );
-    assert!(alone.contains("no wired peers"));
+    assert!(alone.contains("no connected peers"), "{alone}");
 
     // Impersonation: c presents its real secret but names itself "a" every way the wire allows, in
     // a header and in the tool arguments. Neither is read, so c stays c and never sees a's peer.
@@ -157,7 +157,7 @@ fn an_agent_reaches_the_bus_and_sees_only_the_peer_it_is_wired_to() {
     let mut spoofed = String::new();
     stream.read_to_string(&mut spoofed).expect("read");
     assert!(
-        spoofed.contains("no wired peers"),
+        spoofed.contains("no connected peers"),
         "a forged node id must not grant a's view: {spoofed}"
     );
     assert!(!spoofed.contains("Tests"), "impersonation leaked a's peer");
