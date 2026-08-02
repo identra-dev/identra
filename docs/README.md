@@ -1,8 +1,9 @@
 # Identra documentation
 
-A desktop canvas for running coding agents. You drop an agent onto the board, it runs in a real
-terminal inside a node, you wire nodes together, and Identra keeps a memory of what happened so the
-next agent you open already knows the project.
+A desktop shell for running coding agents, with a memory they open already holding. You open an
+agent in a tab, it runs in a real terminal, you connect the ones that should read each other's
+work, and Identra keeps a memory of what happened — which the next agent receives in its opening
+handshake, without calling a tool to ask.
 
 New here? The [README](../README.md) is the front door: what it is, how to install it, and what it
 does. These pages are the depth behind it.
@@ -11,10 +12,10 @@ does. These pages are the depth behind it.
 
 | Page | What it answers |
 |------|-----------------|
-| [Agents](./agents.md) | Which CLIs Identra runs, what each is allowed to do and why, how wiring works |
+| [Agents](./agents.md) | Which CLIs Identra runs, what each is allowed to do and why, how connecting works |
 | [Memory](./memory.md) | What a project remembers, how recall by meaning works, how to turn it off |
 | [Troubleshooting](./troubleshooting.md) | The failures people actually hit, and what each one means |
-| [The browser node](./browser-bridge.md) | The live preview, and the platform limit behind agent-driven browsing |
+| [The browser tab](./browser-bridge.md) | The live preview, and the platform limit behind agent-driven browsing |
 
 ## Start here
 
@@ -28,7 +29,7 @@ curl -fsSL https://raw.githubusercontent.com/identra-dev/identra/main/install.sh
 claude --version
 ```
 
-Then open a folder as a workspace and drop an agent on the canvas. If step 2 came up empty,
+Then open a folder as a workspace and open an agent from the sidebar. If step 2 came up empty,
 [Agents](./agents.md) covers what to install and why Claude Code is the one to start with;
 [Troubleshooting](./troubleshooting.md) covers the case where you have one installed and Identra
 cannot see it.
@@ -38,15 +39,15 @@ cannot see it.
 A small Rust engine with thin shells on top.
 
 - **`identra-core`** owns the hard parts: the PTY terminal manager that spawns real agent CLIs,
-  the canvas store, agent detection, workspaces, the dev server and file browsing.
+  the workspace store, agent detection, workspaces, the dev server and file browsing.
 - **`identra-memory`** is the memory layer: fact extraction, local embeddings, history.
-- **`identra-mcp`** is the context bus, an MCP server that wired agents share context through.
-- **`identra-desktop`** is the Tauri and React shell: the canvas, the nodes, the dock.
+- **`identra-mcp`** is the context bus, an MCP server that connected agents share context through.
+- **`identra-desktop`** is the Tauri and React shell: the three columns, the panes, the memory panel.
 
-A node in the UI is a thin client talking to the engine over a small typed command channel. Output
-streams back with a sequence number, so a node reattaches after a reload without dropping or
-duplicating a line. The canvas is the source of truth for layout and saves itself to
-`.identra/canvas.json` in your project.
+A pane in the UI is a thin client talking to the engine over a small typed command channel. Output
+streams back with a sequence number, so a pane reattaches after a reload without dropping or
+duplicating a line. What a workspace holds — which agents are open, and which are connected —
+saves itself to `.identra/canvas.json` in your project.
 
 ## Everything runs on your machine
 

@@ -1,13 +1,14 @@
 //! The context bus between agent nodes.
 //!
-//! The wire on the canvas is the authorization. Two nodes share nothing unless an [`Edge`]
-//! joins them: no edge means no peer listing, no context read, no message. Every tool here
-//! re-checks the current edges per call, so a wire pulled after launch stops the flow.
+//! The connection is the authorization. Two nodes share nothing unless an [`Edge`] joins them: no
+//! edge means no peer listing, no context read, no message. Every tool here re-checks the current
+//! edges per call, so a connection revoked after launch stops the flow — which is why revoking
+//! bites immediately while granting waits for the peer's next launch.
 //!
 //! The peer tools are plain functions over two seams: the edge set (`&[Edge]`, read from
 //! `.identra/canvas.json` by the caller) and [`NodeIo`] (the PTY side). That keeps them
 //! testable against a fake, no live terminal or HTTP transport needed. `TerminalManager`
-//! satisfies `NodeIo`, so wiring the real bus is one blanket impl, not a rewrite.
+//! satisfies `NodeIo`, so standing the real bus up is one blanket impl, not a rewrite.
 //!
 //! [`tasks`] and [`inbox`] are the other half of working together. Talking coordinates, a board
 //! commits, and a queue is what makes talking reliable. All three are separate because they fail
@@ -74,15 +75,15 @@ impl NodeIo for TerminalManager {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum BusError {
-    /// Caller and peer are not wired. The refusal that makes the edge the authorization.
+    /// Caller and peer are not connected. The refusal that makes the edge the authorization.
     NoEdge,
-    /// Peer is wired but not running (no snapshot to read).
+    /// Peer is connected but not running (no snapshot to read).
     NoPeer,
 }
 
 /// Node ids that share an edge with `caller`, caller itself excluded, no duplicates.
 ///
-/// Derived from the canvas edges alone. A wired-but-not-yet-launched peer still lists, and that
+/// Derived from the edges alone. A connected-but-not-yet-launched peer still lists, and that
 /// matches the demo flow (wire first, launch after) and any dead peer just yields empty
 /// context downstream.
 // Edges only, by design: intersecting with a live-id set (NodeIo) would narrow this to

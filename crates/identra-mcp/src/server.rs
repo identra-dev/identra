@@ -416,12 +416,12 @@ impl Bus {
         match tokio::time::timeout(CANVAS_TIMEOUT, rx).await {
             Ok(Ok(result)) => Ok(result),
             // The window went away between the emit and the reply.
-            Ok(Err(_)) => Err("the canvas closed before it answered".into()),
+            Ok(Err(_)) => Err("the Identra window closed before it answered".into()),
             Err(_) => {
                 // Drop the slot so a late reply does not sit in the map forever.
                 self.pending.lock().unwrap().remove(&request_id);
                 Err(format!(
-                    "the canvas did not answer {action} in time. Its window may be closed or on another workspace: ask your user to bring Identra to the front"
+                    "Identra did not answer {action} in time. Its window may be closed or on another workspace: ask your user to bring Identra to the front"
                 ))
             }
         }
@@ -562,12 +562,12 @@ fn tool_specs() -> Value {
     json!([
         {
             "name": "list_peers",
-            "description": "List the node ids you are wired to on the canvas. Only wired peers can be read or messaged.",
+            "description": "List the node ids you are connected to. Only connected peers can be read or messaged.",
             "inputSchema": {"type": "object", "properties": {}, "additionalProperties": false}
         },
         {
             "name": "get_peer_context",
-            "description": "Read the recent terminal transcript of a wired peer node so you can see what it just did.",
+            "description": "Read the recent terminal transcript of a peer you are connected to, so you can see what it just did.",
             "inputSchema": {
                 "type": "object",
                 "properties": {"nodeId": {"type": "string"}},
@@ -576,7 +576,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "send_to_node",
-            "description": "Send a message to a wired peer. It is queued and waits until they read it, so it is not lost if they are busy, and they are nudged that it arrived. Say what you did, what you changed, and what you need back. If you have nothing to say, say nothing: silence is how a run between agents ends.",
+            "description": "Send a message to a peer you are connected to. It is queued and waits until they read it, so it is not lost if they are busy, and they are nudged that it arrived. Say what you did, what you changed, and what you need back. If you have nothing to say, say nothing: silence is how a run between agents ends.",
             "inputSchema": {
                 "type": "object",
                 "properties": {"nodeId": {"type": "string"}, "text": {"type": "string"}},
@@ -654,12 +654,12 @@ fn tool_specs() -> Value {
         },
         {
             "name": "list_canvas",
-            "description": "See every node on the canvas and how they are wired, including nodes you are not connected to. Use this to find out who is here before you bring on more agents.",
+            "description": "See every node open in this workspace and how they are connected, including ones you are not connected to. Use this to find out who is here before you bring on more agents.",
             "inputSchema": {"type": "object", "properties": {}, "additionalProperties": false}
         },
         {
             "name": "add_terminal",
-            "description": "Bring another agent onto the canvas to help, running as its own node. Use this when the work splits into parts that can run at the same time. The new agent is wired to you automatically, so you can send it work as soon as it starts. Put the work on the board first: a helper with nothing to claim just idles.",
+            "description": "Bring another agent into this workspace to help, running as its own node. Use this when the work splits into parts that can run at the same time. The new agent is connected to you automatically, so you can send it work as soon as it starts. Put the work on the board first: a helper with nothing to claim just idles.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -674,7 +674,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "connect_nodes",
-            "description": "Wire two nodes together so they can read and message each other. A node reads its tools when it starts, so wire before the other agent launches where you can.",
+            "description": "Connect two nodes so they can read and message each other. A node reads its tools when it starts, so connect before the other agent launches where you can. Your user sees every connection, including this one, and can revoke it.",
             "inputSchema": {
                 "type": "object",
                 "properties": {"from": {"type": "string"}, "to": {"type": "string"}},
@@ -683,7 +683,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "add_note",
-            "description": "Leave a note on the canvas for your user to read. Use it for something a human should see and decide on, not for talking to another agent.",
+            "description": "Leave a note for your user to read, as its own tab. Use it for something a human should see and decide on, not for talking to another agent.",
             "inputSchema": {
                 "type": "object",
                 "properties": {"text": {"type": "string"}},
@@ -692,7 +692,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "show_file",
-            "description": "Open a file in a read-only viewer node on the canvas, wired to you, so your user can look at what you made without scrolling your terminal. Use it to hand over an artifact: a report you wrote, an image, a summary. Only files inside the workspace can be shown.",
+            "description": "Open a file in a read-only viewer, connected to you, so your user can look at what you made without scrolling your terminal. Use it to hand over an artifact: a report you wrote, an image, a summary. Only files inside the workspace can be shown.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -725,7 +725,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "land_work",
-            "description": "Merge an isolated helper's branch back onto your checkout and remove its worktree. Use this once a helper you gave its own checkout to (add_terminal with isolate) has finished and committed its work, and you have checked it. Only works on a helper you are wired to. It refuses if the helper has uncommitted changes or the merge conflicts, and leaves the checkout in place for you to sort out.",
+            "description": "Merge an isolated helper's branch back onto your checkout and remove its worktree. Use this once a helper you gave its own checkout to (add_terminal with isolate) has finished and committed its work, and you have checked it. Only works on a helper you are connected to. It refuses if the helper has uncommitted changes or the merge conflicts, and leaves the checkout in place for you to sort out.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -769,7 +769,7 @@ async fn call_tool(bus: &Bus, caller: &str, params: Option<&Value>) -> Value {
                 })
                 .collect();
             ok_text(&if lines.is_empty() {
-                "no wired peers".to_string()
+                "no connected peers".to_string()
             } else {
                 lines.join("\n")
             })
@@ -876,7 +876,7 @@ async fn call_tool(bus: &Bus, caller: &str, params: Option<&Value>) -> Value {
             // is already here, which is not the same question as who it may talk to.
             let peers = list_peers(caller, edges);
             if canvas.nodes.is_empty() {
-                return ok_text("the canvas is empty");
+                return ok_text("nothing is open in this workspace yet");
             }
             let lines: Vec<String> = canvas
                 .nodes
@@ -885,7 +885,7 @@ async fn call_tool(bus: &Bus, caller: &str, params: Option<&Value>) -> Value {
                     let who = if n.id == caller {
                         " (you)"
                     } else if peers.iter().any(|p| p == &n.id) {
-                        " (wired to you)"
+                        " (connected to you)"
                     } else {
                         ""
                     };
@@ -952,10 +952,10 @@ async fn call_tool(bus: &Bus, caller: &str, params: Option<&Value>) -> Value {
                 Ok(v) => canvas_reply(&v, |id| {
                     match &branch {
                     Some(b) => format!(
-                        "added {id} on its own checkout, branch {b}, and wired it to you. It can edit the same files as you without a collision. Put work on the board so it has something to claim."
+                        "added {id} on its own checkout, branch {b}, and connected it to you. It can edit the same files as you without a collision. Put work on the board so it has something to claim."
                     ),
                     None => format!(
-                        "added {id} and wired it to you. It shares your working directory, so split the work by file. Put work on the board so it has something to claim."
+                        "added {id} and connected it to you. It shares your working directory, so split the work by file. Put work on the board so it has something to claim."
                     ),
                 }
                 }),
@@ -965,7 +965,7 @@ async fn call_tool(bus: &Bus, caller: &str, params: Option<&Value>) -> Value {
         "connect_nodes" => {
             let params = json!({"from": arg_str("from"), "to": arg_str("to")});
             match bus.canvas_command("connect_nodes", params).await {
-                Ok(v) => canvas_reply(&v, |_| "wired".to_string()),
+                Ok(v) => canvas_reply(&v, |_| "connected".to_string()),
                 Err(e) => err_text(&e),
             }
         }
@@ -975,7 +975,7 @@ async fn call_tool(bus: &Bus, caller: &str, params: Option<&Value>) -> Value {
                 return err_text("a note needs some text");
             }
             match bus.canvas_command("add_note", json!({"text": text})).await {
-                Ok(v) => canvas_reply(&v, |id| format!("left note {id} on the canvas")),
+                Ok(v) => canvas_reply(&v, |id| format!("left note {id} for your user")),
                 Err(e) => err_text(&e),
             }
         }
@@ -1011,7 +1011,7 @@ async fn call_tool(bus: &Bus, caller: &str, params: Option<&Value>) -> Value {
             });
             match bus.canvas_command("show_file", params).await {
                 Ok(v) => canvas_reply(&v, |id| {
-                    format!("opened {id} on the canvas, showing the file to your user")
+                    format!("opened {id}, showing the file to your user")
                 }),
                 Err(e) => err_text(&e),
             }
@@ -1401,7 +1401,7 @@ fn err_text(text: &str) -> Value {
 
 fn bus_err(e: BusError) -> String {
     match e {
-        BusError::NoEdge => "no edge to that node: draw a wire to it first".into(),
+        BusError::NoEdge => "you are not connected to that node: connect to it first".into(),
         BusError::NoPeer => "that peer is wired but not running yet".into(),
     }
 }
@@ -2062,7 +2062,8 @@ mod tests {
         let again = call_tool(&bus, "b", Some(&json!({"name": "check_inbox"}))).await;
         assert!(text(&again).contains("no new messages"));
 
-        // The wire is still the authorization: c is on the canvas but not wired to a.
+        // The connection is still the authorization: c is open in this workspace but not connected
+        // to a.
         let refused = call_tool(
             &bus,
             "a",
@@ -2070,7 +2071,11 @@ mod tests {
         )
         .await;
         assert_eq!(refused["isError"], true);
-        assert!(text(&refused).contains("no edge"));
+        assert!(
+            text(&refused).contains("not connected"),
+            "{:?}",
+            text(&refused)
+        );
         assert!(
             text(&call_tool(&bus, "c", Some(&json!({"name": "check_inbox"}))).await)
                 .contains("no new messages")

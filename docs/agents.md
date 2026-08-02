@@ -27,7 +27,7 @@ Check what Identra can see:
 just doctor
 ```
 
-Mix them freely on one canvas. Nothing about a workspace is tied to a particular agent.
+Mix them freely in one workspace. Nothing about a workspace is tied to a particular agent.
 
 ## Why Claude Code is the one to start with
 
@@ -38,7 +38,7 @@ returns at `initialize`. Claude Code surfaces what arrives there; the others acc
 and do not show it. So an agent you open in a project Identra already knows starts that session
 already briefed if it is Claude Code, and starts blank otherwise.
 
-The others are not second-class for anything else. They spawn, they wire, they share the task
+The others are not second-class for anything else. They spawn, they connect, they share the task
 board, they read and write memory through the bus tools. They just start their first session
 without the free briefing.
 
@@ -68,7 +68,7 @@ refuses to load project MCP servers at all, which would mean no bus.
 **This is a real trade and it is on by default, so here it is plainly: an agent running like this
 can reach anything you can.** Run Identra on work you have committed.
 
-The reason it is the default is the canvas rather than convenience. An approval prompt is
+The reason it is the default is parallelism rather than convenience. An approval prompt is
 reasonable once and unusable four times at once, which is what a board of parallel agents turns it
 into. Worse, the orchestrator seat runs headless, so a prompt it stops on is a prompt nobody can
 see: codex meets a folder it has not opened before with "Do you trust the contents of this
@@ -90,15 +90,22 @@ and it would do that by ignoring every MCP server you configured yourself. Takin
 away is not something to do quietly as a side effect of a permissions setting, so Identra does not
 pass it.
 
-## Wiring two agents together
+## Connecting two agents
 
-An edge between two nodes is the permission. No wire, no shared context.
+The connection is the permission. Not connected, no shared context.
 
-Draw the wire **before** you launch the second node. A CLI reads its MCP servers once at startup,
-so an agent that was already running when you drew the edge will not see it until it restarts.
+Connect them **before** you launch the second one. A CLI reads its MCP servers once at startup, so
+an agent that was already running when you connected it will not see the connection until it
+restarts. Revoking is the other way round and takes effect immediately, because the bus re-reads
+the connections on every call — a permission should be slower to give than to take away.
 
-Wired agents can message each other, split work, and hand results back over the local bus, and
+Connected agents can message each other, split work, and hand results back over the local bus, and
 what they put on the shared task board shows up in the work panel while you watch.
+
+Agents can connect themselves to each other with `connect_nodes`, which is a real grant and not a
+formality. Every connection in a workspace is listed under **Links**, saying which ones you made
+and which an agent made for itself, and any of them can be revoked there. Locking a tab stops
+agents connecting anything to it at all.
 
 ## Your credentials
 

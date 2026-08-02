@@ -59,8 +59,12 @@ do not have to relaunch after installing something.
 
 ### An agent opens but is not connected to the others
 
-Draw the wire first, then launch. A CLI reads its MCP servers once at startup, so an edge drawn
-after an agent is already running does nothing until that node restarts.
+Connect them first, then launch. A CLI reads its MCP servers once at startup, so a connection made
+after an agent is already running does nothing until that agent restarts. Revoking is the other way
+round and bites immediately, because the bus re-reads the connections on every call.
+
+Every connection in a workspace is listed under **Links**, including any an agent made for itself
+with `connect_nodes`, and each one can be revoked there.
 
 ### gemini will not load the bus
 
@@ -93,7 +97,7 @@ own and works offline immediately.
 It should, from the title bar, from the quit control, or with `Ctrl+Q` / `Cmd+Q`. If it refuses,
 Identra now says so on screen instead of failing silently, and names what went wrong.
 
-Closing flushes your canvas first, but that flush is bounded: the window goes whether or not the
+Closing flushes your workspace first, but that flush is bounded: the window goes whether or not the
 save lands, because an app that will not close over a write you cannot see is holding you hostage.
 
 ### `just dev` fails naming port 1420
@@ -110,11 +114,18 @@ A worse version of the same thing: a leftover dev server plus a fresh relaunch g
 backend under a hot-reloaded new frontend, which looks like the app being haunted rather than like
 two processes disagreeing.
 
-### The canvas came back empty
+### My workspace came back empty
 
-The canvas saves itself to `.identra/canvas.json` in the workspace with a debounced atomic write. If
-that file will not parse it is moved aside to `.bak` rather than discarded, so nothing is destroyed
-and the previous state is still on disk to look at.
+It saves itself to `.identra/canvas.json` in the workspace with a debounced atomic write. If that
+file will not parse it is moved aside to `.bak` rather than discarded, so nothing is destroyed and
+the previous state is still on disk to look at.
+
+### My agents came back but their arrangement did not
+
+That is deliberate, and Identra says so once on the first workspace it opens after the upgrade.
+Agents are tabs now, and the connections between them carried over untouched, because a connection
+is a permission you granted and a permission must not vanish because a layout changed. The
+positions are what went, because the positions are what the shell replaced.
 
 ### Identra wrote files into my repository
 
