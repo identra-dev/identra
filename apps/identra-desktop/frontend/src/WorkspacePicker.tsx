@@ -187,8 +187,6 @@ export default function WorkspacePicker({
               >
                 <BoardPreview
                   canvas={w.canvas}
-                  width={280}
-                  height={168}
                   className="identra-preview identra-home__preview"
                 />
                 <span className="identra-home__name">{w.title}</span>
