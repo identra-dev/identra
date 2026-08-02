@@ -8,6 +8,7 @@ import {
   memoryModelRetry,
   memorySearch,
   memoryStatus,
+  type CanvasNode,
   type Memory,
   type ModelStatus,
   type Task,
@@ -31,9 +32,18 @@ type Tab = "tasks" | "memory";
 export default function WorkPanel({
   onClose,
   initialTab = "tasks",
+  nodes = [],
 }: {
   onClose: () => void;
   initialTab?: Tab;
+  // What is open in this workspace, so a fact can say which agent recorded it.
+  //
+  // The store has carried the provenance since it was written — `run_id` is the node that learned
+  // the fact — and the panel was already printing it. It was printing a UUID. "Who told you this"
+  // and "when" are the two axes anyone scans a memory list on, and half of that was a string with
+  // no meaning to the person reading it, which is worse than blank: it looks like an identifier
+  // they are supposed to recognise.
+  nodes?: CanvasNode[];
 }) {
   const [tab, setTab] = useState<Tab>(initialTab);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -360,7 +370,15 @@ export default function WorkPanel({
                     {m.run_id !== "" && (
                       <>
                         <span aria-hidden="true">·</span>
-                        <span>{m.run_id}</span>
+                        {/* The tab that recorded it, by name. A fact from a session that has since
+                            been closed says so rather than showing the id: the id is not something
+                            a person can look up, and pretending otherwise sends them hunting. The
+                            raw value stays on hover, because it is what you would need if you were
+                            actually debugging. */}
+                        <span title={m.run_id}>
+                          {nodes.find((n) => n.id === m.run_id)?.title ??
+                            "an earlier session"}
+                        </span>
                       </>
                     )}
                     <button

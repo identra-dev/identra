@@ -1304,7 +1304,9 @@ export default function App() {
             )}
           </button>
         </div>
-        {right === "work" && <WorkPanel onClose={() => setRight(null)} />}
+        {right === "work" && (
+          <WorkPanel nodes={nodes} onClose={() => setRight(null)} />
+        )}
         {right === "connections" && (
           <ConnectionsPanel
             nodes={nodes}
