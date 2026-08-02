@@ -407,6 +407,24 @@ fn memory_superseded(
         .collect())
 }
 
+/// What each connected agent was handed at its handshake, by node id.
+///
+/// This is the one thing the shell can show that says Identra's central mechanism fired. The
+/// handshake happens between an agent's CLI and the bus, entirely out of the window's sight, and
+/// the canvas used to be the place a person could watch the result arrive. Nothing is left that
+/// does that, so the bus keeps the receipt and this hands it over.
+///
+/// **Sent, never known.** The MCP `initialize` response goes to the agent, not back to us, so
+/// whether the model read a word of it is not observable from here — over ACP it is not even
+/// observable in principle, since the protocol does not return the server's initialize response to
+/// the client. Any wording built on this that says "knows" is claiming something nobody measured.
+#[tauri::command]
+fn bus_handshakes(
+    state: State<AppState>,
+) -> std::collections::HashMap<String, identra_mcp::server::Handshake> {
+    state.bus.handshakes()
+}
+
 /// Search what the project has learned. Same ranking the agents get: with a model, by meaning;
 /// without one, by words. This is why it goes through the bus opener rather than a bare store.
 #[tauri::command]
@@ -903,6 +921,7 @@ pub fn run() {
             canvas_command_result,
             board_list,
             memory_list,
+            bus_handshakes,
             memory_restated,
             memory_superseded,
             memory_search,

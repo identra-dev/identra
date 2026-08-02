@@ -33,9 +33,11 @@ import {
   planSeat,
   summarizePlan,
 } from "./commandcenter";
+import { ago } from "./ago";
 import {
   agentsByKind,
   boardList,
+  busHandshakes,
   canvasCommandResult,
   canvasExport,
   canvasImport,
@@ -61,6 +63,7 @@ import {
   type CanvasNode,
   type CanvasResult,
   type Edge,
+  type Handshake,
   type Grantor,
   type Viewport,
   type Wallpaper,
@@ -126,6 +129,14 @@ export default function App() {
   const [saveError, setSaveError] = useState<string | null>(null);
   // Said once per workspace, on the first open after the canvas went away.
   const [canvasNotice, setCanvasNotice] = useState(false);
+  // What each agent was handed when it connected, by node id.
+  //
+  // This is the whole of the product's claim made visible. An agent opening already holding the
+  // project is the one thing here a competitor cannot match by writing a better tool description,
+  // and it happens entirely out of sight: the handshake is between that agent's CLI and the bus.
+  // The canvas at least gave a person something to watch; with it gone, this line is the only
+  // evidence the mechanism fired at all.
+  const [handshakes, setHandshakes] = useState<Record<string, Handshake>>({});
 
   // The centre column. Session-only by design: see the note at the top of layout.ts.
   const [tree, setTree] = useState<PaneTree>(() => leaf("pane-0"));
@@ -782,6 +793,12 @@ export default function App() {
     revealAsked.current = false;
     let dropped = false;
     const tick = async () => {
+      // Its own catch: the receipt not answering is no reason to stop counting facts, which is
+      // what the badge beside it reads from.
+      const shook = await busHandshakes().catch(
+        () => ({}) as Record<string, Handshake>,
+      );
+      if (!dropped) setHandshakes(shook);
       const list = await memoryList(50).catch(() => null);
       if (dropped || list === null) return;
       setMemoryCount(list.length);
@@ -1023,6 +1040,8 @@ export default function App() {
             }}
           />
         </div>
+
+        <HandshakeLine handshakes={handshakes} nodes={nodes} />
 
         <div className="identra-side__section">Open an agent</div>
         <div className="identra-side__agents">
@@ -1315,6 +1334,53 @@ export default function App() {
         />
       )}
       {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
+    </div>
+  );
+}
+
+// The receipt, in the sidebar under the workspace name: what the last agent to connect was handed.
+//
+// It says **sent**, and it has to keep saying sent. The MCP initialize response goes to the agent
+// and never comes back to us, so whether the model read a word of it is not observable — over ACP
+// it is not observable even in principle, because the protocol does not return the server's
+// initialize response to the client at all. "Knows 7 facts" would read better and would be a claim
+// nobody measured.
+//
+// The most recent one rather than a list. This is a glance that answers "did the thing happen",
+// and a column of counts is a thing to study. The full list is one hover away.
+function HandshakeLine({
+  handshakes,
+  nodes,
+}: {
+  handshakes: Record<string, Handshake>;
+  nodes: CanvasNode[];
+}) {
+  const now = Math.floor(Date.now() / 1000);
+  const named = Object.entries(handshakes)
+    .map(([id, h]) => ({
+      // A handshake from an agent that has since been closed still counts as evidence, so it keeps
+      // its place with whatever name is left rather than being dropped for lack of a tab.
+      name: nodes.find((n) => n.id === id)?.title ?? "an agent",
+      ...h,
+    }))
+    .sort((a, b) => b.at - a.at);
+  const last = named[0];
+  if (last === undefined) return null;
+  return (
+    <div
+      className="identra-side__handshake"
+      title={named
+        .map(
+          (h) => `${h.name}: sent ${h.facts} fact${h.facts === 1 ? "" : "s"}`,
+        )
+        .join("\n")}
+    >
+      {/* Zero is worth saying rather than hiding. "Connected and there was nothing to tell it" and
+          "has not connected" look identical to a person, and only one of them means this works. */}
+      {last.facts === 0
+        ? `Sent no facts to ${last.name} — nothing learned here yet`
+        : `Sent ${last.facts} fact${last.facts === 1 ? "" : "s"} to ${last.name}`}
+      <span className="identra-side__handshake-when">{ago(last.at, now)}</span>
     </div>
   );
 }
